@@ -78,7 +78,7 @@ Antarctica and Greenland.
 |---|---|---|---|---|---|
 | climate (`tiles/`, unchanged from v0.1) | 464 | 77,387,293 B | 125,488 B | 601,316 B | 42 s |
 | soil (`soil/`, 4 bands) | 330 | 19,645,866 B | 45,041 B | 153,435 B | 8 s |
-| regions (`regions/`, 2 bands) | 463 | 752,005 B | 1,447 B | 3,612 B | 24 s |
+| regions (`regions/`, 2 bands) | 463 | 752,008 B | 1,447 B | 3,612 B | 24 s |
 
 A location fetches about 172 KB at the median (125 + 45 + 1.4 KB).
 
