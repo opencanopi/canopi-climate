@@ -391,11 +391,7 @@ fn finish(cfg: &BuildConfig, specs: Vec<TileSpec>, slot_stats: Value, checks: Va
     });
     write_json_file(&cfg.out.join("build-report.json"), &report)?;
     let m = manifest(specs);
-    let text = serde_json::to_string_pretty(&m).map_err(|e| PipelineError::Data(e.to_string()))?;
-    let mpath = cfg.out.join("manifest.json");
-    std::fs::write(&mpath, text + "\n").map_err(|e| PipelineError::io(&mpath, e))?;
-    write_attribution(&cfg.out)?;
-    write_sums(&cfg.out, &m)?;
+    write_release_files(&cfg.out, &m)?;
     eprintln!(
         "tiles: {} files, {:.1} MiB, max {} B, {complete} complete cells",
         m.tiles.len(),
@@ -413,27 +409,41 @@ fn write_json_file(path: &Path, v: &Value) -> Result<()> {
 /// Release files listed in `SHA256SUMS` besides the tiles.
 const SUMMED: [&str; 3] = ["manifest.json", "build-report.json", "ATTRIBUTION.md"];
 
+/// Write `manifest.json`, `ATTRIBUTION.md` and `SHA256SUMS` (in that
+/// order: the sums cover the other two).
+///
+/// # Errors
+/// I/O errors.
+pub fn write_release_files(out: &Path, m: &Manifest) -> Result<()> {
+    let text = serde_json::to_string_pretty(m).map_err(|e| PipelineError::Data(e.to_string()))?;
+    let mpath = out.join("manifest.json");
+    std::fs::write(&mpath, text + "\n").map_err(|e| PipelineError::io(&mpath, e))?;
+    write_attribution(out, m)?;
+    write_sums(out, m)
+}
+
 /// `SHA256SUMS` over the manifest, the report, the attribution and every
-/// tile.
+/// tile, the site layers' included.
 fn write_sums(out: &Path, m: &Manifest) -> Result<()> {
     let mut lines = Vec::new();
     for name in SUMMED {
         lines.push(format!("{}  {name}", sha256_file(&out.join(name))?));
     }
-    for t in &m.tiles {
+    let layer_tiles = m.layers.iter().flat_map(|l| l.tiles.iter());
+    for t in m.tiles.iter().chain(layer_tiles) {
         lines.push(format!("{}  {}", t.sha256, t.path));
     }
     let p = out.join("SHA256SUMS");
     std::fs::write(&p, lines.join("\n") + "\n").map_err(|e| PipelineError::io(&p, e))
 }
 
-fn write_attribution(out: &Path) -> Result<()> {
+fn write_attribution(out: &Path, m: &Manifest) -> Result<()> {
     let mut s = String::from(
         "# Attribution\n\nThis grid is derived from the datasets below by canopi-climate \
          (https://github.com/opencanopi/canopi-climate, AGPL-3.0-or-later). Their licences and \
          attribution requirements apply to the grid; cite them when you use it.\n",
     );
-    for src in sources::manifest_sources() {
+    for src in &m.sources {
         s.push_str(&format!(
             "\n## {}\n\n- Citation: {}\n- Data: {}\n- Licence: {}\n- Notes: {}\n",
             src.title, src.citation, src.landing, src.licence, src.notes
@@ -526,7 +536,7 @@ pub fn manifest(tiles: Vec<TileSpec>) -> Manifest {
                 scenario_label: s.scenario.label().into(),
             })
             .collect(),
-        sources: sources::manifest_sources(),
+        sources: sources::manifest_sources("climate"),
         tiles,
         notes: notes(),
         layers: Vec::new(),
@@ -613,8 +623,8 @@ mod tests {
         for f in ["manifest.json", "build-report.json"] {
             std::fs::write(dir.join(f), "{}").unwrap();
         }
-        write_attribution(&dir).unwrap();
         let m = manifest(vec![]);
+        write_attribution(&dir, &m).unwrap();
         write_sums(&dir, &m).unwrap();
         let sums = std::fs::read_to_string(dir.join("SHA256SUMS")).unwrap();
         for f in ["manifest.json", "build-report.json", "ATTRIBUTION.md"] {

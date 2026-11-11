@@ -11,9 +11,12 @@ pub mod assemble;
 pub mod build;
 pub mod cog;
 pub mod igh;
+pub mod layers;
 pub mod netcdf;
 pub mod raster;
+pub mod regions;
 pub mod sample;
+pub mod soil;
 pub mod sources;
 pub mod tiff_rows;
 

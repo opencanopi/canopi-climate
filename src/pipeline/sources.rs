@@ -38,6 +38,9 @@ pub struct Source {
     pub files: &'static [PinnedFile],
     /// Whether the grid needs these files (the rest serve checks only).
     pub required: bool,
+    /// What the source feeds: `climate` (the climate tiles), or a site
+    /// layer id (`soil`, `regions`).
+    pub layer: &'static str,
 }
 
 const FIGSHARE_KG: &str = "https://ndownloader.figshare.com/files/61012822";
@@ -233,6 +236,98 @@ const CHELSA_FUTURE_FILES: &[PinnedFile] = &[
     ),
 ];
 
+/// Base URL of the SoilGrids 5 km aggregates (for documentation).
+pub const SOILGRIDS_BASE: &str = "https://files.isric.org/soilgrids/latest/data_aggregated/5000m";
+
+/// SoilGrids 2.0 5-km aggregates (Homolosine, `int16`), checked against
+/// ISRIC's `checksum.sha256.txt` of each variable on 2026-11-11.
+const SOILGRIDS_FILES: &[PinnedFile] = &[
+    pin(
+        "soilgrids/phh2o_0-5cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/phh2o/phh2o_0-5cm_mean_5000.tif"
+        ),
+        "a74bc7e8551e8e281f7abb9cfc4fe3d60a72717c8cb131f7feb51b43a893c8c9",
+    ),
+    pin(
+        "soilgrids/phh2o_5-15cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/phh2o/phh2o_5-15cm_mean_5000.tif"
+        ),
+        "23816f452e812142d1f91bbc1c8d25026f05c131d7175a375030da8bf37ea8d0",
+    ),
+    pin(
+        "soilgrids/phh2o_15-30cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/phh2o/phh2o_15-30cm_mean_5000.tif"
+        ),
+        "16faa5e308dfb60681bbad24bc6b41df69cb6a507506ac8683e22d98c0c27f01",
+    ),
+    pin(
+        "soilgrids/sand_0-5cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/sand/sand_0-5cm_mean_5000.tif"
+        ),
+        "af70445daad0ff93830e81805e55c2b84ff6bf4f4ac2d62e0ab6bc1648e7708f",
+    ),
+    pin(
+        "soilgrids/sand_5-15cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/sand/sand_5-15cm_mean_5000.tif"
+        ),
+        "8cfb0cc06ddd6c6557e6bbe9c85b502adfa31270e92ad45bfd6255c14d343610",
+    ),
+    pin(
+        "soilgrids/sand_15-30cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/sand/sand_15-30cm_mean_5000.tif"
+        ),
+        "e89d0475f6fcd0651fb90046811af54c229a5aa84d046af3c17a9eceeabcc44c",
+    ),
+    pin(
+        "soilgrids/clay_0-5cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/clay/clay_0-5cm_mean_5000.tif"
+        ),
+        "8d75b5db5bb295b4f54e64068d5cdbae8283ae7d6fab5278b9225face1b7020a",
+    ),
+    pin(
+        "soilgrids/clay_5-15cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/clay/clay_5-15cm_mean_5000.tif"
+        ),
+        "75d8cbd87391814fd400edeb1bd970ea458a1dde2640b2fafd905f84f814e0fb",
+    ),
+    pin(
+        "soilgrids/clay_15-30cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/clay/clay_15-30cm_mean_5000.tif"
+        ),
+        "d42c0067eccea56ed3272608149c510e5fc1aa0c555cc6782c972cc1b768f72b",
+    ),
+];
+
+const NATURAL_EARTH_FILES: &[PinnedFile] = &[pin(
+    "naturalearth/ne_50m_admin_0_countries.geojson",
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_countries.geojson",
+    "3e458fc036ad0a66411f2c1e6cac49c5d7bfb81cb1123bc513b22511a2b7fdeb",
+)];
+
+const WGSRPD_FILES: &[PinnedFile] = &[pin(
+    "wgsrpd/level3.geojson",
+    "https://raw.githubusercontent.com/tdwg/wgsrpd/f68afd99aa94adadaa3e0328e4aadda75ecc4215/geojson/level3.geojson",
+    "c172bcf6aba20e19477adc60aebf0023068f0175dca8480f0760b090dcf64840",
+)];
+
 /// Every source, grid inputs first.
 pub const SOURCES: &[Source] = &[
     Source {
@@ -244,6 +339,7 @@ pub const SOURCES: &[Source] = &[
         notes: "The authors' GloH2O page links CC BY-NC 4.0 instead; the Canopi project has the authors' permission for its use. Köppen-Geiger classes (1-km maps) and the 0.1-degree monthly temperature and precipitation climatologies (ensemble mean of the constrained CMIP6 models; 1961-1990 and 1991-2020 from observations).",
         files: BECK_FILES,
         required: true,
+        layer: "climate",
     },
     Source {
         id: "chelsa-v2.1",
@@ -254,6 +350,7 @@ pub const SOURCES: &[Source] = &[
         notes: "bio6 (mean daily minimum of the coldest month) and bio5 (mean daily maximum of the warmest month) give the baseline of tmin_cold and tmax_warm; bio12 serves only as a check on precipitation.",
         files: CHELSA_FILES,
         required: true,
+        layer: "climate",
     },
     Source {
         id: "chelsa-v2.1-future-check",
@@ -264,6 +361,40 @@ pub const SOURCES: &[Source] = &[
         notes: "Compares the grid's delta-method 2041-2070 SSP3-7.0 tmin_cold with CHELSA's own downscaled projections.",
         files: CHELSA_FUTURE_FILES,
         required: false,
+        layer: "climate",
+    },
+    Source {
+        id: "soilgrids-2.0",
+        title: "SoilGrids 2.0, 5 km aggregates: pH (water), sand and clay at 0-5, 5-15 and 15-30 cm",
+        citation: "Poggio, L., de Sousa, L. M., Batjes, N. H., Heuvelink, G. B. M., Kempen, B., Ribeiro, E., Rossiter, D. (2021). SoilGrids 2.0: producing soil information for the globe with quantified spatial uncertainty. SOIL 7, 217-240. https://doi.org/10.5194/soil-7-217-2021",
+        landing: "https://www.isric.org/explore/soilgrids",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Mean predictions, Interrupted Goode Homolosine (ESRI:54052), 5 km. Reprojected to latitude/longitude by nearest pixel at 0.05-degree cell centres and combined into a depth-weighted 0-30 cm mean. SoilGrids has no value on built-up areas, water and permanent ice; nearby land cells take the nearest measured value (fill_distance band).",
+        files: SOILGRIDS_FILES,
+        required: true,
+        layer: "soil",
+    },
+    Source {
+        id: "natural-earth-admin0-50m",
+        title: "Natural Earth 1:50m Cultural Vectors, Admin 0 - Countries, version 5.1.2",
+        citation: "Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com. Admin 0 - Countries, 1:50m, version 5.1.2.",
+        landing: "https://www.naturalearthdata.com/downloads/50m-cultural-vectors/50m-admin-0-countries-2/",
+        licence: "Public domain (https://www.naturalearthdata.com/about/terms-of-use/)",
+        notes: "Country of each cell as ISO 3166-1 alpha-2: ISO_A2_EH when it is a two-letter code, else ISO_A2, else (Natural Earth gives -99) the de jure country of ADM0_A3 for Somaliland (SOL -> SO) and Northern Cyprus (CYN -> CY); the Siachen Glacier (KAS) gets none. Natural Earth shows de facto boundaries.",
+        files: NATURAL_EARTH_FILES,
+        required: true,
+        layer: "regions",
+    },
+    Source {
+        id: "wgsrpd-level3",
+        title: "World Geographical Scheme for Recording Plant Distributions (WGSRPD), level 3 botanical countries",
+        citation: "Brummitt, R. K. (2001). World Geographical Scheme for Recording Plant Distributions, Edition 2. Plant Taxonomic Database Standards No. 2. Hunt Institute for Botanical Documentation, Carnegie Mellon University, Pittsburgh, for the International Working Group on Taxonomic Databases for Plant Sciences (TDWG). Polygons: TDWG, https://github.com/tdwg/wgsrpd (geojson/level3.geojson at commit f68afd9).",
+        landing: "https://github.com/tdwg/wgsrpd",
+        licence: "Not declared: the tdwg/wgsrpd repository carries no licence (checked 2026-11-11).",
+        notes: "369 level-3 areas, the scheme WCVP uses for native ranges. The licence is not declared upstream; the file is used as the published TDWG standard's reference geometry, with this attribution.",
+        files: WGSRPD_FILES,
+        required: true,
+        layer: "regions",
     },
 ];
 
@@ -293,12 +424,13 @@ pub fn verify(dir: &Path, required_only: bool) -> Result<Vec<String>> {
     Ok(problems)
 }
 
-/// Manifest entries of the sources the grid uses.
+/// Manifest entries of the sources that `layer` (`climate`, `soil`,
+/// `regions`) uses.
 #[must_use]
-pub fn manifest_sources() -> Vec<SourceSpec> {
+pub fn manifest_sources(layer: &str) -> Vec<SourceSpec> {
     SOURCES
         .iter()
-        .filter(|s| s.required)
+        .filter(|s| s.required && s.layer == layer)
         .map(|s| SourceSpec {
             id: s.id.into(),
             title: s.title.into(),
@@ -349,13 +481,28 @@ mod tests {
             }
         }
         assert!(CHELSA_FILES.iter().all(|f| f.url.starts_with(CHELSA_BASE)));
+        assert!(
+            SOILGRIDS_FILES
+                .iter()
+                .all(|f| f.url.starts_with(SOILGRIDS_BASE))
+        );
+        for layer in ["climate", "soil", "regions"] {
+            assert!(!manifest_sources(layer).is_empty(), "{layer}");
+        }
     }
 
     #[test]
     fn verify_reports_missing_files() {
         let dir = std::env::temp_dir().join("canopi-climate-no-sources");
         let problems = verify(&dir, true).unwrap();
-        assert_eq!(problems.len(), BECK_FILES.len() + CHELSA_FILES.len());
+        assert_eq!(
+            problems.len(),
+            BECK_FILES.len()
+                + CHELSA_FILES.len()
+                + SOILGRIDS_FILES.len()
+                + NATURAL_EARTH_FILES.len()
+                + WGSRPD_FILES.len()
+        );
         assert!(problems[0].starts_with("missing beck2023/"));
         assert!(pinned(&dir, "chelsa/CHELSA_bio6_1981-2010_V.2.1.tif").is_ok());
         assert!(pinned(&dir, "nope").is_err());
