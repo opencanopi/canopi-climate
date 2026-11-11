@@ -88,21 +88,41 @@ impl Baseline {
     }
 }
 
+/// Which extremes of a cell were clamped to the monthly means.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Clamped {
+    tmin: bool,
+    tmax: bool,
+}
+
 /// Encoded values of one slot for one cell (variables in band order).
-fn encode_cell(i: usize, kg: &[u8], beck: &[Vec<f32>], base: &Baseline) -> [i16; 8] {
+///
+/// The coldest-month mean minimum cannot exceed the coldest-month mean, nor
+/// the warmest-month mean maximum fall below the warmest-month mean. Where
+/// CHELSA and Beck disagree that much (mostly on the ice sheets), the
+/// extreme is clamped to the mean and counted.
+fn encode_cell(i: usize, kg: &[u8], beck: &[Vec<f32>], base: &Baseline) -> ([i16; 8], Clamped) {
     let tcold = beck[beck_band::TCOLD][i];
     let twarm = beck[beck_band::TWARM][i];
+    let (tmin, tmax) = (base.tmin(i, tcold), base.tmax(i, twarm));
+    let clamped = Clamped {
+        tmin: tmin > tcold,
+        tmax: tmax < twarm,
+    };
+    let tmin = if clamped.tmin { tcold } else { tmin };
+    let tmax = if clamped.tmax { twarm } else { tmax };
     let k = kg[i];
-    [
+    let v = [
         if k > 0 { i16::from(k) } else { NODATA },
-        Variable::TminCold.encode(base.tmin(i, tcold)),
-        Variable::TmaxWarm.encode(base.tmax(i, twarm)),
+        Variable::TminCold.encode(tmin),
+        Variable::TmaxWarm.encode(tmax),
         Variable::TmeanCold.encode(tcold),
         Variable::TmeanWarm.encode(twarm),
         Variable::Precip.encode(beck[beck_band::PRECIP][i]),
         Variable::Aridity.encode(beck[beck_band::ARIDITY][i]),
         Variable::DryMonths.encode(beck[beck_band::DRY][i]),
-    ]
+    ];
+    (v, clamped)
 }
 
 /// Counts for one slot: Köppen class against the cell's own temperatures,
@@ -118,13 +138,15 @@ struct SlotStats {
     class_of_means_compared: u64,
     class_of_means_same: u64,
     group_of_means_same: u64,
-    tmin_above_tmean_cold: u64,
-    tmax_below_tmean_warm: u64,
+    tmin_clamped: u64,
+    tmax_clamped: u64,
+    tmin_clamped_outside_e: u64,
+    tmax_clamped_outside_e: u64,
     class_missing: u64,
 }
 
 impl SlotStats {
-    fn add(&mut self, v: &[i16; 8], of_means: f32) {
+    fn add(&mut self, v: &[i16; 8], clamped: Clamped, of_means: f32) {
         self.land += 1;
         let d = |var: Variable| var.decode(v[var.index()]).map(|x| x as f32);
         let code = u8::try_from(v[0]).ok().filter(|c| (1..=30).contains(c));
@@ -142,12 +164,11 @@ impl SlotStats {
                 let g = koppen::group(code).unwrap_or('?');
                 *self.margin_gt1_by_group.entry(g).or_default() += 1;
             }
-            if d(Variable::TminCold).is_some_and(|t| t > tc) {
-                self.tmin_above_tmean_cold += 1;
-            }
-            if d(Variable::TmaxWarm).is_some_and(|t| t < tw) {
-                self.tmax_below_tmean_warm += 1;
-            }
+            let outside_e = koppen::group(code) != Some('E');
+            self.tmin_clamped += u64::from(clamped.tmin);
+            self.tmax_clamped += u64::from(clamped.tmax);
+            self.tmin_clamped_outside_e += u64::from(clamped.tmin && outside_e);
+            self.tmax_clamped_outside_e += u64::from(clamped.tmax && outside_e);
         }
         if of_means.is_finite() {
             self.class_of_means_compared += 1;
@@ -177,8 +198,12 @@ impl SlotStats {
                 "percent_same_class": pct(self.class_of_means_same, self.class_of_means_compared),
                 "percent_same_group": pct(self.group_of_means_same, self.class_of_means_compared),
             },
-            "tmin_cold_above_tmean_cold": self.tmin_above_tmean_cold,
-            "tmax_warm_below_tmean_warm": self.tmax_below_tmean_warm,
+            "extremes_clamped_to_monthly_means": {
+                "tmin_cold": self.tmin_clamped,
+                "tmax_warm": self.tmax_clamped,
+                "tmin_cold_outside_group_e": self.tmin_clamped_outside_e,
+                "tmax_warm_outside_group_e": self.tmax_clamped_outside_e,
+            },
         })
     }
 }
@@ -209,11 +234,11 @@ fn fill_slot(
                 if land[i] == 0 {
                     continue;
                 }
-                let v = encode_cell(i, kg, beck, base);
+                let (v, clamped) = encode_cell(i, kg, beck, base);
                 for (vi, x) in v.iter().enumerate() {
                     data[j * BANDS + band(vi, slot)] = *x;
                 }
-                st.add(&v, beck[beck_band::KOPPEN_OF_MEANS][i]);
+                st.add(&v, clamped, beck[beck_band::KOPPEN_OF_MEANS][i]);
             }
             st
         })
@@ -231,8 +256,10 @@ fn fill_slot(
         total.class_of_means_compared += p.class_of_means_compared;
         total.class_of_means_same += p.class_of_means_same;
         total.group_of_means_same += p.group_of_means_same;
-        total.tmin_above_tmean_cold += p.tmin_above_tmean_cold;
-        total.tmax_below_tmean_warm += p.tmax_below_tmean_warm;
+        total.tmin_clamped += p.tmin_clamped;
+        total.tmax_clamped += p.tmax_clamped;
+        total.tmin_clamped_outside_e += p.tmin_clamped_outside_e;
+        total.tmax_clamped_outside_e += p.tmax_clamped_outside_e;
         total.class_missing += p.class_missing;
     }
     total
@@ -504,6 +531,7 @@ fn notes() -> Vec<String> {
         "Köppen classes come from Beck's 1-km maps (most frequent class in the cell), temperatures from Beck's 0.1-degree monthly means: in some cells the two disagree. Lookups report koppen_temperature_margin_c; build-report.json counts the cells.",
         "Aridity uses Thornthwaite PET, which runs low in hot dry climates compared with Penman-Monteith: compare aridity between places, not with thresholds computed from other PET formulas.",
         "Precipitation products disagree by tens of percent at a point (build-report.json compares Beck with CHELSA): treat precipitation and aridity as estimates.",
+        "tmin_cold never exceeds tmean_cold and tmax_warm is never below tmean_warm: where CHELSA and Beck disagree that much (mostly on the ice sheets) the extreme is set to the monthly mean; build-report.json counts the cells.",
         "tmin_cold is the mean daily minimum of the coldest month, not the annual extreme minimum: no USDA hardiness zone is derived.",
         "Lookups use the point's cell when it has every value, else the nearest complete cell within 2 cells inside the same tile, else nothing.",
         "GeoTIFF tags carry no band names or scale/offset (wbgeotiff writes no GDAL metadata): use this manifest to read bands in GIS software.",
@@ -538,6 +566,34 @@ mod tests {
         assert!(m.sources.iter().any(|s| s.id == "beck2023"));
         assert!(m.sources.iter().all(|s| s.id != "chelsa-v2.1-future-check"));
         assert!(m.notes.iter().any(|n| n.contains("USDA")));
+    }
+
+    #[test]
+    fn extremes_are_clamped_to_monthly_means() {
+        let base = Baseline {
+            bio5: vec![20.0, 30.0],
+            bio6: vec![1.0, -5.0],
+            tcold_now: vec![0.0, 0.0],
+            twarm_now: vec![22.0, 22.0],
+            shift_cold: vec![0.0, 0.0],
+            shift_warm: vec![0.0, 0.0],
+        };
+        let beck: Vec<Vec<f32>> = [0.0, 22.0, 800.0, 1.0, 2.0, f32::NAN]
+            .iter()
+            .map(|&x| vec![x, x])
+            .collect();
+        let (v, c) = encode_cell(0, &[14, 14], &beck, &base);
+        assert_eq!(
+            c,
+            Clamped {
+                tmin: true,
+                tmax: true
+            }
+        );
+        assert_eq!((v[1], v[2]), (0, 220));
+        let (v, c) = encode_cell(1, &[14, 14], &beck, &base);
+        assert_eq!(c, Clamped::default());
+        assert_eq!((v[1], v[2]), (-50, 300));
     }
 
     #[test]
