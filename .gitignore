@@ -1,3 +1,6 @@
 /target
 /data/
 *.tif
+/pkg/
+/pkg-node/
+!tests/fixtures/*.tif
