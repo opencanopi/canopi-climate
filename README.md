@@ -29,7 +29,7 @@ describe the place itself:
 | soil | `texture` | class | USDA texture class (`loam`, `silty_clay_loam`, …), derived at lookup |
 | soil | `filled`, `fill_distance_cells` | –, cells | SoilGrids has no value on towns, water and ice; land cells within 8 cells of a measured cell take its values, and say how far it was |
 | regions | `wgsrpd_l3` | code | WGSRPD level-3 botanical country (`FRA`, `BZL`, …; 369 areas), the scheme of WCVP native ranges |
-| regions | `iso_a2` | code | country, ISO 3166-1 alpha-2 (Natural Earth 1:50m) |
+| regions | `iso_a2` | code | country or territory, ISO 3166-1 alpha-2 (Natural Earth 1:50m map units: Réunion is RE, Svalbard SJ, Puerto Rico PR) |
 
 Regions carry codes only, no names.
 
@@ -198,10 +198,15 @@ The `regions` and `soil` stages add their layer to the release written by
   8 cells (about 44 km at the equator).
 - **Regions**: each cell takes the polygon that contains its centre. Areas
   too small for any centre (islets, Monaco, Vatican, …) take the cell of
-  their interior point, so all 369 WGSRPD areas and all 237 Natural Earth
-  codes are present. Natural Earth's -99 codes are resolved from
-  `ISO_A2_EH` and `ADM0_A3` (Norway NO, France FR, Kosovo XK, Somaliland
-  SO, Northern Cyprus CY; Taiwan TW; Siachen has no code).
+  their interior point, so all 369 WGSRPD areas and all 247 Natural Earth
+  codes are present. Countries come from Natural Earth's map units, which
+  split overseas departments and territories from their sovereign, so they
+  get their own ISO code (Réunion RE, French Guiana GF, Svalbard and Jan
+  Mayen SJ, Bonaire BQ, Christmas Island CX, Hong Kong HK, Greenland GL).
+  Natural Earth's -99 codes are resolved from `ISO_A2_EH` and the unit code
+  (Norway NO, England GB, Kosovo XK, Somaliland SO, Northern Cyprus CY;
+  Taiwan TW; Siachen has no code). Gibraltar, Bouvet Island and the US
+  Minor Outlying Islands have no unit at 1:50m.
 
 See `docs/validation.md` for a comparison with ERA5 at 22 cities and the
 site-layer checks, and `docs/decisions/` for design decisions (0003: site
@@ -239,7 +244,7 @@ and their citations go with any use of it (`ATTRIBUTION.md` in each release).
   with quantified spatial uncertainty. *SOIL* 7, 217–240.
   <https://doi.org/10.5194/soil-7-217-2021>. Data: ISRIC,
   <https://files.isric.org/soilgrids/latest/data_aggregated/5000m/>.
-- **Natural Earth** 1:50m Admin 0 – Countries, v5.1.2, **public domain**
+- **Natural Earth** 1:50m Admin 0 – Map Units, v5.1.2, **public domain**
   ("Made with Natural Earth").
 - **WGSRPD** level 3: Brummitt, R. K. (2001). *World Geographical Scheme for
   Recording Plant Distributions*, Edition 2. TDWG / Hunt Institute.

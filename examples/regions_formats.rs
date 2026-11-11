@@ -119,7 +119,7 @@ fn main() -> Res<()> {
     let (src, scratch) = (Path::new(src), Path::new(scratch));
     std::fs::create_dir_all(scratch)?;
     let l3 = load_wgsrpd(&src.join("wgsrpd/level3.geojson"))?;
-    let ne = load_natural_earth(&src.join("naturalearth/ne_50m_admin_0_countries.geojson"))?;
+    let ne = load_natural_earth(&src.join(canopi_climate::pipeline::regions::NATURAL_EARTH_FILE))?;
     // Land tiles: those with a code at 0.05 degrees.
     let all: Vec<TileId> = TileId::all().collect();
     let flags = all

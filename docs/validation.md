@@ -205,6 +205,10 @@ Antarctic ice sheets and the sea return no soil.
 | Fiji, 178.0 E and 178.95 W | FIJ | FJ | antimeridian |
 | Chukotka, 178 E and 175 W | MAG | RU | antimeridian |
 | Reykjavik | ICE | IS | |
+| Réunion, Cayenne, Guadeloupe, Martinique, Mayotte | | RE, GF, GP, MQ, YT | French overseas departments: own ISO codes (map units) |
+| Longyearbyen, Jan Mayen | | SJ | Jan Mayen overridden from NO to SJ as in ISO 3166-1 |
+| Bonaire, Curaçao, Aruba | | BQ, CW, AW | |
+| Nuuk, Tórshavn, San Juan, Guam, Christmas I., Cocos, Hong Kong, Macao, Bermuda, Stanley, Nouméa area, Tahiti | | GL, FO, PR, GU, CX, CC, HK, MO, BM, FK, NC, PF | |
 | 2 cells off Boulogne-sur-Mer, Palavas, Cape Town | FRA/FRA/CPP | FR/FR/ZA | coastal points reach land within 2 cells |
 
 Vatican: Natural Earth 1:50m draws it about 1.5 km west of its real

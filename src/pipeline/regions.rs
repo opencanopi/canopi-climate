@@ -1,5 +1,5 @@
 //! The `regions` stage: rasterize the WGSRPD level-3 areas and the Natural
-//! Earth 1:50m countries onto the 0.05-degree layer grid and write the
+//! Earth 1:50m admin-0 map units onto the 0.05-degree layer grid and write the
 //! `regions/` tiles ([`crate::regions`]).
 //!
 //! A cell takes the polygon that contains its centre (boundary included),
@@ -68,20 +68,29 @@ impl Areas {
     }
 }
 
-/// ISO 3166-1 alpha-2 code of a Natural Earth admin-0 feature:
-/// `ISO_A2_EH` when it is two letters, else `ISO_A2`, else (both -99) the
-/// de jure country of a few `ADM0_A3` units. `None` for the Siachen Glacier
-/// and any other unit without a code.
+/// ISO 3166-1 alpha-2 code of a Natural Earth admin-0 map unit (`unit` is
+/// its `GU_A3`). Map units split overseas departments and territories from
+/// their sovereign (Réunion RE, Svalbard SJ, Bonaire BQ, Christmas Island
+/// CX, ...), and carry that code in `ISO_A2_EH`.
+///
+/// Order: a unit override (Jan Mayen, `NJM`: `ISO_A2_EH` says NO, but ISO
+/// 3166-1 files it under SJ, "Svalbard and Jan Mayen"); then `ISO_A2_EH`
+/// when it is two letters; then `ISO_A2`; then (both -99) the de jure
+/// country of Somaliland (`SOL` -> SO) and Northern Cyprus (`CYN` -> CY).
+/// `None` for the Siachen Glacier (`KAS`) and any other unit without a code.
 #[must_use]
-pub fn natural_earth_iso_a2(iso_a2: &str, iso_a2_eh: &str, adm0_a3: &str) -> Option<String> {
+pub fn natural_earth_iso_a2(iso_a2: &str, iso_a2_eh: &str, unit: &str) -> Option<String> {
     let two = |s: &str| s.len() == 2 && s.bytes().all(|b| b.is_ascii_uppercase());
+    if unit == "NJM" {
+        return Some("SJ".into());
+    }
     if two(iso_a2_eh) {
         return Some(iso_a2_eh.to_string());
     }
     if two(iso_a2) {
         return Some(iso_a2.to_string());
     }
-    match adm0_a3 {
+    match unit {
         "SOL" => Some("SO".into()), // Somaliland
         "CYN" => Some("CY".into()), // Northern Cyprus
         _ => None,
@@ -139,13 +148,16 @@ pub fn load_wgsrpd(path: &Path) -> Result<Areas> {
     load(path, |f| Some(prop(f, "LEVEL3_COD").to_string()))
 }
 
-/// Natural Earth admin-0 countries ([`natural_earth_iso_a2`]).
+/// Natural Earth admin-0 map units, relative path in the sources directory.
+pub const NATURAL_EARTH_FILE: &str = "naturalearth/ne_50m_admin_0_map_units.geojson";
+
+/// Natural Earth admin-0 map units ([`natural_earth_iso_a2`]).
 ///
 /// # Errors
 /// Unreadable or malformed GeoJSON.
 pub fn load_natural_earth(path: &Path) -> Result<Areas> {
     load(path, |f| {
-        natural_earth_iso_a2(prop(f, "ISO_A2"), prop(f, "ISO_A2_EH"), prop(f, "ADM0_A3"))
+        natural_earth_iso_a2(prop(f, "ISO_A2"), prop(f, "ISO_A2_EH"), prop(f, "GU_A3"))
     })
 }
 
@@ -313,9 +325,9 @@ fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
         encoding: layers::encoding(REGION_BANDS),
         bands: vec![
             band("wgsrpd_l3", "WGSRPD level-3 code, three letters a b c (A = 0 ... Z = 25) stored as a * 676 + b * 26 + c"),
-            band("iso_a2", "ISO 3166-1 alpha-2 code from Natural Earth admin-0 1:50m, two letters a b stored as a * 26 + b"),
+            band("iso_a2", "ISO 3166-1 alpha-2 code from Natural Earth admin-0 map units 1:50m (overseas territories keep their own code), two letters a b stored as a * 26 + b"),
         ],
-        sources: vec!["wgsrpd-level3".into(), "natural-earth-admin0-50m".into()],
+        sources: vec!["wgsrpd-level3".into(), "natural-earth-map-units-50m".into()],
         tiles,
         notes: vec![
             "A cell takes the polygon containing its centre (boundary included). Polygons too small to contain a cell centre (small islands) mark the cell of their interior point when it is empty.".into(),
@@ -341,10 +353,7 @@ pub fn stage_regions(cfg: &BuildConfig) -> Result<()> {
     layers::read_manifest(&cfg.out)?;
     let t0 = std::time::Instant::now();
     let l3 = load_wgsrpd(&sources::pinned(&cfg.sources, "wgsrpd/level3.geojson")?)?;
-    let ne = load_natural_earth(&sources::pinned(
-        &cfg.sources,
-        "naturalearth/ne_50m_admin_0_countries.geojson",
-    )?)?;
+    let ne = load_natural_earth(&sources::pinned(&cfg.sources, NATURAL_EARTH_FILE)?)?;
     let l3 = rasterize_global(&l3, 3);
     eprintln!(
         "regions: wgsrpd {:.1} s {}",
@@ -389,6 +398,32 @@ mod tests {
         assert_eq!(g.report["codes_missing"], json!([]));
         let next = LayerCell::of(43.73, 7.5).unwrap();
         assert_eq!(g.codes[next.global_index()], encode_code("FR").unwrap());
+    }
+
+    #[test]
+    fn overseas_map_units_keep_their_own_codes() {
+        // Map units carry the overseas ISO code in ISO_A2_EH.
+        assert_eq!(
+            natural_earth_iso_a2("FR-974", "RE", "REU").as_deref(),
+            Some("RE")
+        );
+        assert_eq!(
+            natural_earth_iso_a2("SJ", "SJ", "NSV").as_deref(),
+            Some("SJ")
+        );
+        assert_eq!(
+            natural_earth_iso_a2("BQ", "BQ", "NLY").as_deref(),
+            Some("BQ")
+        );
+        // Jan Mayen is in ISO's SJ (Svalbard and Jan Mayen), not NO.
+        assert_eq!(
+            natural_earth_iso_a2("-99", "NO", "NJM").as_deref(),
+            Some("SJ")
+        );
+        assert_eq!(
+            natural_earth_iso_a2("-99", "NO", "NOR").as_deref(),
+            Some("NO")
+        );
     }
 
     #[test]

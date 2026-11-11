@@ -317,9 +317,9 @@ const SOILGRIDS_FILES: &[PinnedFile] = &[
 ];
 
 const NATURAL_EARTH_FILES: &[PinnedFile] = &[pin(
-    "naturalearth/ne_50m_admin_0_countries.geojson",
-    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_countries.geojson",
-    "3e458fc036ad0a66411f2c1e6cac49c5d7bfb81cb1123bc513b22511a2b7fdeb",
+    "naturalearth/ne_50m_admin_0_map_units.geojson",
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_map_units.geojson",
+    "b8d421aca6e9e08e8cdf09cc26af111cc3e0deba4fe915611d58ade71e8a4db0",
 )];
 
 const WGSRPD_FILES: &[PinnedFile] = &[pin(
@@ -375,12 +375,12 @@ pub const SOURCES: &[Source] = &[
         layer: "soil",
     },
     Source {
-        id: "natural-earth-admin0-50m",
-        title: "Natural Earth 1:50m Cultural Vectors, Admin 0 - Countries, version 5.1.2",
-        citation: "Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com. Admin 0 - Countries, 1:50m, version 5.1.2.",
-        landing: "https://www.naturalearthdata.com/downloads/50m-cultural-vectors/50m-admin-0-countries-2/",
+        id: "natural-earth-map-units-50m",
+        title: "Natural Earth 1:50m Cultural Vectors, Admin 0 - Map Units, version 5.1.2",
+        citation: "Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com. Admin 0 - Details, Map Units, 1:50m, version 5.1.2.",
+        landing: "https://www.naturalearthdata.com/downloads/50m-cultural-vectors/50m-admin-0-details/",
         licence: "Public domain (https://www.naturalearthdata.com/about/terms-of-use/)",
-        notes: "Country of each cell as ISO 3166-1 alpha-2: ISO_A2_EH when it is a two-letter code, else ISO_A2, else (Natural Earth gives -99) the de jure country of ADM0_A3 for Somaliland (SOL -> SO) and Northern Cyprus (CYN -> CY); the Siachen Glacier (KAS) gets none. Natural Earth shows de facto boundaries.",
+        notes: "Country of each cell as ISO 3166-1 alpha-2. Map units split overseas departments and territories from their sovereign (Reunion RE, French Guiana GF, Svalbard SJ, Bonaire BQ, Christmas Island CX, ...). Code: Jan Mayen (GU_A3 NJM) -> SJ as in ISO 3166-1; else ISO_A2_EH when it is a two-letter code; else ISO_A2; else (Natural Earth gives -99) the de jure country of Somaliland (SOL -> SO) and Northern Cyprus (CYN -> CY); the Siachen Glacier (KAS) gets none. Gibraltar, Bouvet Island and the US Minor Outlying Islands have no map unit at 1:50m. Natural Earth shows de facto boundaries.",
         files: NATURAL_EARTH_FILES,
         required: true,
         layer: "regions",

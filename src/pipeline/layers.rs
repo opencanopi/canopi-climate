@@ -166,6 +166,16 @@ pub fn register(out: &Path, layer: LayerSpec, report: Value) -> Result<()> {
     m.layers.retain(|l| l.id != id);
     m.layers.push(layer);
     m.layers.sort_by(|a, b| a.id.cmp(&b.id));
+    // Keep the climate sources and those a layer still cites (a source
+    // replaced in a rebuild must leave ATTRIBUTION.md).
+    let climate: Vec<String> = super::sources::manifest_sources("climate")
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    let cited =
+        |sid: &String| climate.contains(sid) || m.layers.iter().any(|l| l.sources.contains(sid));
+    let kept: Vec<_> = m.sources.iter().filter(|s| cited(&s.id)).cloned().collect();
+    m.sources = kept;
     let rpath = out.join("build-report.json");
     let mut r = super::build::read_json(&rpath)?;
     if !r.get("layers").is_some_and(Value::is_object) {
@@ -194,7 +204,10 @@ mod tests {
     #[test]
     fn cut_write_register_and_read_back() {
         let out = temp("release");
-        let m = super::super::assemble::manifest(vec![]);
+        let mut m = super::super::assemble::manifest(vec![]);
+        let mut stale = m.sources[0].clone();
+        stale.id = "replaced-source".into();
+        m.sources.push(stale);
         std::fs::write(out.join("build-report.json"), "{}").unwrap();
         super::super::assemble::write_release_files(&out, &m).unwrap();
 
@@ -235,6 +248,11 @@ mod tests {
         assert_eq!(m.layers.len(), 1);
         assert_eq!(m.format_version, crate::manifest::FORMAT_VERSION);
         assert!(m.sources.iter().any(|s| s.id == "soilgrids-2.0"));
+        assert!(!m.sources.iter().any(|s| s.id == "replaced-source"));
+        assert!(
+            m.sources.iter().any(|s| s.id == "chelsa-v2.1"),
+            "climate kept"
+        );
         assert!(has_layer(&out, "soil") && !has_layer(&out, "regions"));
         let sums = std::fs::read_to_string(out.join("SHA256SUMS")).unwrap();
         assert!(sums.contains("test/n50e000.tif") && sums.contains("manifest.json"));

@@ -8,7 +8,7 @@
 The consortium tool needs, for one location, the topsoil pH and texture and
 the place's WGSRPD level-3 area and country. Each comes from a global source
 in its own geometry: SoilGrids 2.0 (Homolosine raster, 5 km), WGSRPD level 3
-(369 polygons) and Natural Earth admin-0 1:50m (polygons). How are they
+(369 polygons) and Natural Earth admin-0 map units 1:50m (polygons). How are they
 stored so that the website fetches little per location, with the same reader
 as the climate tiles?
 
@@ -110,7 +110,7 @@ Browser reader (wasm32, `opt-level = "z"`, LTO, after `wasm-bindgen`):
 - Region boundaries are 0.05° cells: a point within one cell of a border can
   get the neighbouring area. Areas too small for any cell centre (islets,
   Monaco, Vatican) take their interior point's cell, so all 369 WGSRPD
-  areas and 237 Natural Earth codes appear; Natural Earth 1:50m places
+  areas and 247 Natural Earth codes appear; Natural Earth 1:50m places
   the Vatican about 1.5 km west of its real position (12.428–12.439 E against 12.446–12.458 E), so a lookup at the real
   Vatican returns IT.
 - WGSRPD's geometry repository declares no licence. It is cited

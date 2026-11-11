@@ -9,7 +9,7 @@
 //! | `chelsa` | CHELSA bio5, bio6, bio12 | `chelsa/bio{5,6,12}.tif` |
 //! | `beck` | Beck 0.1-degree monthly NetCDF | `beck/<period>.tif` (summaries) |
 //! | `tiles` | the work files | out: `tiles/*.tif`, `manifest.json`, `SHA256SUMS`, `build-report.json`, `ATTRIBUTION.md` |
-//! | `regions` | WGSRPD level 3, Natural Earth admin-0 1:50m | out: `regions/*.tif`, manifest layer `regions` |
+//! | `regions` | WGSRPD level 3, Natural Earth admin-0 map units 1:50m | out: `regions/*.tif`, manifest layer `regions` |
 //! | `soil` | SoilGrids 2.0 5 km aggregates, the `regions` layer (land mask) | out: `soil/*.tif`, manifest layer `soil` |
 //! | `check-future` | CHELSA 2041-2070 SSP3-7.0 bio6 (5 GCMs) | `check-future.json` |
 

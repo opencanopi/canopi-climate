@@ -105,6 +105,47 @@ mod site_layers {
         assert_eq!((sea.wgsrpd_l3, sea.iso_a2), (None, None));
     }
 
+    /// Overseas departments and territories with their own ISO 3166-1
+    /// code (not their sovereign's): (lat, lon, iso_a2).
+    const OVERSEAS: [(f64, f64, &str); 22] = [
+        (-21.12, 55.53, "RE"),  // Réunion
+        (4.93, -52.33, "GF"),   // Cayenne, French Guiana
+        (16.25, -61.55, "GP"),  // Guadeloupe
+        (14.64, -61.02, "MQ"),  // Martinique
+        (-12.82, 45.15, "YT"),  // Mayotte
+        (-21.3, 165.5, "NC"),   // New Caledonia
+        (-17.6, -149.45, "PF"), // Tahiti
+        (78.22, 15.65, "SJ"),   // Longyearbyen, Svalbard
+        (71.0, -8.3, "SJ"),     // Jan Mayen
+        (12.2, -68.26, "BQ"),   // Bonaire
+        (12.12, -68.93, "CW"),  // Curaçao
+        (12.52, -69.97, "AW"),  // Aruba
+        (64.18, -51.72, "GL"),  // Nuuk, Greenland
+        (62.01, -6.77, "FO"),   // Tórshavn, Faroe
+        (18.4, -66.06, "PR"),   // San Juan, Puerto Rico
+        (13.47, 144.75, "GU"),  // Guam
+        (-10.49, 105.62, "CX"), // Christmas Island
+        (-12.19, 96.83, "CC"),  // Cocos (Keeling) Islands
+        (22.32, 114.17, "HK"),  // Hong Kong
+        (22.19, 113.54, "MO"),  // Macao
+        (32.3, -64.78, "BM"),   // Bermuda
+        (-51.7, -57.85, "FK"),  // Stanley, Falklands
+    ];
+
+    #[test]
+    #[ignore = "needs CANOPI_CLIMATE_GRID"]
+    fn overseas_territories_have_their_own_codes() {
+        let mut g = grid();
+        let mut wrong = Vec::new();
+        for (lat, lon, a2) in OVERSEAS {
+            let r = g.regions(lat, lon, LAYER_LOOKUP_RADIUS).unwrap().unwrap();
+            if r.iso_a2.as_deref() != Some(a2) {
+                wrong.push(format!("{lat} {lon}: {:?} (want {a2})", r.iso_a2));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     #[test]
     #[ignore = "needs CANOPI_CLIMATE_GRID"]
     fn coastal_points_find_land() {
@@ -136,7 +177,11 @@ mod site_layers {
         assert!(g.has_layer("soil") && g.has_layer("regions"));
         assert_eq!(g.verify().unwrap(), Vec::<String>::new());
         let ids: Vec<&str> = g.manifest().sources.iter().map(|s| s.id.as_str()).collect();
-        for id in ["soilgrids-2.0", "natural-earth-admin0-50m", "wgsrpd-level3"] {
+        for id in [
+            "soilgrids-2.0",
+            "natural-earth-map-units-50m",
+            "wgsrpd-level3",
+        ] {
             assert!(ids.contains(&id), "{id}");
         }
     }
