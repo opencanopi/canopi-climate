@@ -1,0 +1,223 @@
+//! `canopi-climate` command line: build the grid, sample points, look up one
+//! point.
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use canopi_climate::lookup::DEFAULT_RADIUS;
+use canopi_climate::pipeline::build::{self, BuildConfig, Stage};
+use canopi_climate::pipeline::sample::{Grid, sample_csv};
+use canopi_climate::pipeline::{PipelineError, Result, sources};
+use clap::{Parser, Subcommand};
+
+const DEFAULT_SOURCES: &str = "/media/daylon/main_hdd/canopi-cache/climate";
+
+#[derive(Parser)]
+#[command(
+    name = "canopi-climate",
+    version,
+    about = "Global 0.1-degree climate grid for Canopi"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Build the grid from the pinned sources, stage by stage.
+    BuildGrid {
+        /// Directory holding the source files (`canopi-climate sources`).
+        #[arg(long, env = "CANOPI_CLIMATE_SOURCES", default_value = DEFAULT_SOURCES)]
+        sources: PathBuf,
+        /// Release directory (tiles, manifest).
+        #[arg(long)]
+        out: PathBuf,
+        /// Work directory for intermediates (default: `<out>/../work-<out name>`).
+        #[arg(long)]
+        work: Option<PathBuf>,
+        /// Stages to run (repeatable); default: verify, koppen, chelsa, beck, tiles.
+        #[arg(long = "stage", value_enum)]
+        stages: Vec<Stage>,
+        /// Only these Beck periods in the `beck` stage (e.g. 1991_2020, 2041_2070_ssp245).
+        #[arg(long = "beck-period")]
+        beck_only: Vec<String>,
+        /// Redo stages whose outputs exist.
+        #[arg(long)]
+        force: bool,
+        /// Skip the source verification check (development only).
+        #[arg(long)]
+        skip_verify: bool,
+    },
+    /// List the source files with their URLs and SHA-256; with --verify,
+    /// check a local copy.
+    Sources {
+        /// Check the files in this directory.
+        #[arg(long)]
+        verify: Option<PathBuf>,
+    },
+    /// Sample a CSV of points (columns lat, lon, optional id) and write a
+    /// long CSV: one row per point and period/scenario.
+    Sample {
+        /// Input CSV (`-` for standard input).
+        points: PathBuf,
+        /// Grid directory.
+        #[arg(long)]
+        grid: PathBuf,
+        /// Output CSV (default: standard output).
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Search radius in cells for the nearest complete cell.
+        #[arg(long, default_value_t = DEFAULT_RADIUS)]
+        radius: usize,
+    },
+    /// Look one point up and print JSON.
+    Lookup {
+        /// Latitude (degrees north).
+        #[arg(allow_hyphen_values = true)]
+        lat: f64,
+        /// Longitude (degrees east).
+        #[arg(allow_hyphen_values = true)]
+        lon: f64,
+        /// Grid directory.
+        #[arg(long)]
+        grid: PathBuf,
+        /// Search radius in cells.
+        #[arg(long, default_value_t = DEFAULT_RADIUS)]
+        radius: usize,
+    },
+    /// Check every tile of a grid against its manifest.
+    VerifyGrid {
+        /// Grid directory.
+        grid: PathBuf,
+    },
+}
+
+fn main() -> ExitCode {
+    match run(Cli::parse()) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<ExitCode> {
+    match cli.command {
+        Command::BuildGrid {
+            sources,
+            out,
+            work,
+            stages,
+            beck_only,
+            force,
+            skip_verify,
+        } => {
+            let work = work.unwrap_or_else(|| {
+                let name = out
+                    .file_name()
+                    .map_or_else(|| "grid".into(), |n| n.to_string_lossy().into_owned());
+                out.with_file_name(format!("work-{name}"))
+            });
+            let cfg = BuildConfig {
+                sources,
+                out,
+                work,
+                force,
+                skip_verify,
+                beck_only,
+            };
+            let stages = if stages.is_empty() {
+                build::DEFAULT_STAGES.to_vec()
+            } else {
+                stages
+            };
+            build::run(&cfg, &stages)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Sources { verify } => list_sources(verify),
+        Command::Sample {
+            points,
+            grid,
+            output,
+            radius,
+        } => sample(&points, &grid, output.as_deref(), radius),
+        Command::Lookup {
+            lat,
+            lon,
+            grid,
+            radius,
+        } => {
+            let mut g = Grid::open(&grid)?;
+            let r = g.lookup(lat, lon, radius)?;
+            let text =
+                serde_json::to_string_pretty(&r).map_err(|e| PipelineError::Data(e.to_string()))?;
+            println!("{text}");
+            Ok(if r.is_some() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            })
+        }
+        Command::VerifyGrid { grid } => {
+            let g = Grid::open(&grid)?;
+            let problems = g.verify()?;
+            for p in &problems {
+                eprintln!("{p}");
+            }
+            eprintln!(
+                "{} tiles, {} problems",
+                g.manifest().tiles.len(),
+                problems.len()
+            );
+            Ok(if problems.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+    }
+}
+
+fn list_sources(verify: Option<PathBuf>) -> Result<ExitCode> {
+    for s in sources::SOURCES {
+        let optional = if s.required { "" } else { " [optional check]" };
+        println!("# {} ({}){optional}", s.title, s.licence);
+        for f in s.files {
+            println!("{}  {}  {}", f.sha256, f.path, f.url);
+        }
+    }
+    if let Some(dir) = verify {
+        let problems = sources::verify(&dir, false)?;
+        for p in &problems {
+            eprintln!("{p}");
+        }
+        if !problems.is_empty() {
+            return Ok(ExitCode::FAILURE);
+        }
+        eprintln!("all source files match");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn sample(points: &Path, grid: &Path, output: Option<&Path>, radius: usize) -> Result<ExitCode> {
+    let mut g = Grid::open(grid)?;
+    let input: Box<dyn std::io::Read> = if points.as_os_str() == "-" {
+        Box::new(std::io::stdin().lock())
+    } else {
+        Box::new(std::fs::File::open(points).map_err(|e| PipelineError::io(points, e))?)
+    };
+    let output: Box<dyn std::io::Write> = match output {
+        Some(p) => Box::new(std::io::BufWriter::new(
+            std::fs::File::create(p).map_err(|e| PipelineError::io(p, e))?,
+        )),
+        None => Box::new(std::io::stdout().lock()),
+    };
+    let s = sample_csv(&mut g, input, output, radius)?;
+    eprintln!(
+        "{} points: {} with data, {} without data nearby, {} invalid",
+        s.points, s.ok, s.no_data, s.invalid
+    );
+    Ok(ExitCode::SUCCESS)
+}
