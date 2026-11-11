@@ -292,6 +292,72 @@ pub(crate) fn round6(x: f64) -> f64 {
 }
 
 #[cfg(test)]
+pub(crate) mod synthetic {
+    //! Synthetic soil and regions tiles for tests (also the committed
+    //! fixtures `tests/fixtures/synthetic-{soil,regions}-n50e000.tif`).
+
+    use super::{LAYER_TILE_CELLS, LAYER_TILE_LEN, LayerTile};
+    use crate::grid::TileId;
+    use crate::model::NODATA;
+    use crate::regions::{REGION_BANDS, encode_code};
+    use crate::soil::SOIL_BANDS;
+
+    /// Land: 40-46 N, 0-6 E of tile n50e000.
+    pub(crate) fn is_land(x: usize, y: usize) -> bool {
+        (80..200).contains(&y) && x < 120
+    }
+
+    /// Soil: measured on land except a "city" at 45-45.5 N, 3-3.5 E,
+    /// filled from 1-2 cells away.
+    pub(crate) fn soil() -> LayerTile {
+        let id = TileId { col: 18, row: 4 };
+        let mut data = vec![NODATA; LAYER_TILE_LEN * SOIL_BANDS];
+        for y in 0..LAYER_TILE_CELLS {
+            for x in 0..LAYER_TILE_CELLS {
+                if !is_land(x, y) {
+                    continue;
+                }
+                let city = (90..100).contains(&y) && (60..70).contains(&x);
+                let fill = if city { 1 + i16::from(x == 65) } else { 0 };
+                let i = y * LAYER_TILE_CELLS + x;
+                let v = [
+                    55 + (x % 30) as i16,
+                    100 + 5 * (y % 100) as i16,
+                    50 + 3 * (x % 100) as i16,
+                    fill,
+                ];
+                data[i * SOIL_BANDS..(i + 1) * SOIL_BANDS].copy_from_slice(&v);
+            }
+        }
+        LayerTile {
+            id,
+            bands: SOIL_BANDS,
+            data,
+        }
+    }
+
+    /// Regions: "FRA"/"FR" west of 3 E, "SWI"/"CH" east of it on land.
+    pub(crate) fn regions() -> LayerTile {
+        let id = TileId { col: 18, row: 4 };
+        let mut data = vec![NODATA; LAYER_TILE_LEN * REGION_BANDS];
+        for j in 0..LAYER_TILE_LEN {
+            let (x, y) = (j % LAYER_TILE_CELLS, j / LAYER_TILE_CELLS);
+            if !is_land(x, y) {
+                continue;
+            }
+            let (l3, a2) = if x < 60 { ("FRA", "FR") } else { ("SWI", "CH") };
+            data[j * 2] = encode_code(l3).unwrap_or(NODATA);
+            data[j * 2 + 1] = encode_code(a2).unwrap_or(NODATA);
+        }
+        LayerTile {
+            id,
+            bands: REGION_BANDS,
+            data,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::grid::Cell;
@@ -348,6 +414,20 @@ mod tests {
             Err(LookupError::WrongTile { .. })
         ));
         assert!(LayerTile::new(id, 2, vec![0; LAYER_TILE_LEN]).is_err());
+    }
+
+    #[test]
+    fn committed_fixtures_decode() {
+        let soil = include_bytes!("../tests/fixtures/synthetic-soil-n50e000.tif");
+        let regions = include_bytes!("../tests/fixtures/synthetic-regions-n50e000.tif");
+        assert_eq!(crate::soil::decode(soil).unwrap(), synthetic::soil());
+        assert_eq!(
+            crate::regions::decode(regions).unwrap(),
+            synthetic::regions()
+        );
+        assert!(crate::soil::decode(regions).is_err(), "band count checked");
+        assert!(crate::tile::Tile::decode(soil).is_err());
+        assert!(crate::soil::decode(&soil[..soil.len() / 2]).is_err());
     }
 
     #[test]

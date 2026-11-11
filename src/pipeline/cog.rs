@@ -162,6 +162,32 @@ mod tests {
         }
     }
 
+    /// The committed layer fixtures are what the writer produces today
+    /// (`CANOPI_REGEN_FIXTURES=1` rewrites them).
+    #[test]
+    fn committed_layer_fixtures_are_reproducible() {
+        use crate::layer::synthetic;
+        for (name, tile) in [
+            ("soil", synthetic::soil()),
+            ("regions", synthetic::regions()),
+        ] {
+            let fixture = format!(
+                "{}/tests/fixtures/synthetic-{name}-n50e000.tif",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let bytes =
+                write_layer_tile_checked(&tile, &temp(&format!("{name}-fixture.tif"))).unwrap();
+            if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+                std::fs::write(&fixture, &bytes).unwrap();
+            }
+            assert_eq!(
+                std::fs::read(&fixture).unwrap(),
+                bytes,
+                "{name} fixture drifted"
+            );
+        }
+    }
+
     /// The committed fixture is what the writer produces today. Set
     /// `CANOPI_REGEN_FIXTURES=1` to rewrite it after a deliberate change.
     #[test]

@@ -1,11 +1,18 @@
 //! WebAssembly bindings (`wasm` feature). The host fetches the tile file
-//! itself (whole file), then calls [`lookup_js`].
+//! itself (whole file), then calls [`lookup_js`], [`lookup_soil_js`] or
+//! [`lookup_regions_js`]. The climate, soil and regions tiles of a point
+//! share one name, in three directories.
 //!
 //! ```js
-//! import init, { tileName, lookup } from "./canopi_climate.js";
+//! import init, { tileName, lookup, lookupSoil, lookupRegions } from "./canopi_climate.js";
 //! const name = tileName(lat, lon);              // "n50e000.tif", or undefined
-//! const bytes = new Uint8Array(await (await fetch(`/data/climate/${name}`)).arrayBuffer());
-//! const climate = lookup(bytes, lat, lon);      // object, or null at sea
+//! const get = async (dir) => {
+//!   const res = await fetch(`/data/climate/${dir}/${name}`);  // 404: no data in the tile
+//!   return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+//! };
+//! const climate = lookup(await get("tiles"), lat, lon);        // object, or null at sea
+//! const soil = lookupSoil(await get("soil"), lat, lon);        // object, or null
+//! const regions = lookupRegions(await get("regions"), lat, lon); // { wgsrpd_l3, iso_a2, ... }
 //! ```
 
 use wasm_bindgen::prelude::{JsError, JsValue, wasm_bindgen};
@@ -32,12 +39,57 @@ pub fn tile_name(lat: f64, lon: f64) -> Option<String> {
 pub fn lookup_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result<JsValue, JsError> {
     let tile = Tile::decode(tile_bytes).map_err(|e| JsError::new(&e.to_string()))?;
     match crate::lookup::lookup(&tile, lat, lon).map_err(|e| JsError::new(&e.to_string()))? {
-        Some(found) => {
-            let ser = serde_wasm_bindgen::Serializer::json_compatible();
-            serde::Serialize::serialize(&found, &ser).map_err(|e| JsError::new(&e.to_string()))
-        }
+        Some(found) => to_js(&found),
         None => Ok(JsValue::NULL),
     }
+}
+
+fn to_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsError> {
+    let ser = serde_wasm_bindgen::Serializer::json_compatible();
+    value
+        .serialize(&ser)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Decode a soil tile and look a point up (its cell, else the nearest cell
+/// with soil values within 2 cells). Returns the
+/// [`crate::soil::SoilLookup`] as a plain object (`ph_h2o`, `sand_pct`,
+/// `clay_pct`, `silt_pct`, `texture`, `filled`, ...), or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a soil tile, the coordinate is invalid or
+/// the point lies in another tile.
+#[wasm_bindgen(js_name = lookupSoil)]
+pub fn lookup_soil_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result<JsValue, JsError> {
+    let tile = crate::soil::decode(tile_bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::soil::lookup(&tile, lat, lon).map_err(|e| JsError::new(&e.to_string()))? {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Decode a regions tile and look a point up. Returns the
+/// [`crate::regions::RegionsLookup`] as a plain object: `wgsrpd_l3` (e.g.
+/// `"FRA"`) and `iso_a2` (e.g. `"FR"`), each `null` when no area is within
+/// 2 cells.
+///
+/// # Errors
+/// Throws when the bytes are not a regions tile, the coordinate is invalid
+/// or the point lies in another tile.
+#[wasm_bindgen(js_name = lookupRegions)]
+pub fn lookup_regions_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result<JsValue, JsError> {
+    let tile = crate::regions::decode(tile_bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    let found =
+        crate::regions::lookup(&tile, lat, lon).map_err(|e| JsError::new(&e.to_string()))?;
+    to_js(&found)
+}
+
+/// USDA texture class id (e.g. `"silt_loam"`) of sand and clay
+/// percentages; `undefined` for impossible fractions.
+#[wasm_bindgen(js_name = textureClass)]
+#[must_use]
+pub fn texture_class_js(sand_pct: f64, clay_pct: f64) -> Option<String> {
+    crate::soil::texture_class(sand_pct, clay_pct).map(|c| c.id().to_string())
 }
 
 /// Crate version, for logs and cache keys.
