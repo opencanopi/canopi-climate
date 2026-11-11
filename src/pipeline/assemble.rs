@@ -378,7 +378,7 @@ fn finish(cfg: &BuildConfig, specs: Vec<TileSpec>, slot_stats: Value, checks: Va
     let mut sizes: Vec<u64> = specs.iter().map(|t| t.bytes).collect();
     sizes.sort_unstable();
     let complete: u64 = specs.iter().map(|t| u64::from(t.complete_cells)).sum();
-    let report = json!({
+    let mut report = json!({
         "tiles": specs.len(),
         "total_bytes": total,
         "median_tile_bytes": sizes.get(sizes.len() / 2),
@@ -389,8 +389,10 @@ fn finish(cfg: &BuildConfig, specs: Vec<TileSpec>, slot_stats: Value, checks: Va
         "source_checks": checks,
         "check_future": optional_json(&cfg.work.join("check-future.json")),
     });
+    let mut m = manifest(specs);
+    // Site layers built earlier stay in the release.
+    super::layers::carry_over(&cfg.out, &mut m, &mut report)?;
     write_json_file(&cfg.out.join("build-report.json"), &report)?;
-    let m = manifest(specs);
     write_release_files(&cfg.out, &m)?;
     eprintln!(
         "tiles: {} files, {:.1} MiB, max {} B, {complete} complete cells",

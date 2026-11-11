@@ -173,7 +173,9 @@ the cell's own monthly means, clamped extremes, and source comparisons; its
 per country, and region codes present, missing and set at an interior point.
 The `regions` and `soil` stages add their layer to the release written by
 `tiles` (and rewrite `manifest.json`, `ATTRIBUTION.md` and `SHA256SUMS`);
-`--force` rebuilds one.
+`--force` rebuilds one. Re-running `tiles` keeps the layers. Rebuilding
+`regions` removes the `soil` layer, whose fill uses the regions as land
+mask; the next `soil` stage rebuilds it.
 
 ### Method
 

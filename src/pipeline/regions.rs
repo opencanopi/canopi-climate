@@ -388,7 +388,13 @@ pub fn stage_regions(cfg: &BuildConfig) -> Result<()> {
         "seconds": t0.elapsed().as_secs_f64().round(),
     });
     eprintln!("regions: {}", report["sizes"]);
-    layers::register(&cfg.out, layer_spec(specs), report)
+    layers::register(&cfg.out, layer_spec(specs), report)?;
+    // The soil fill uses the regions as its land mask: soil built on the
+    // old regions is stale.
+    if layers::unregister(&cfg.out, "soil")? {
+        eprintln!("regions: removed the soil layer (built on the old land mask); run --stage soil");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
