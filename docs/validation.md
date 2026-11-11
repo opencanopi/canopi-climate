@@ -1,0 +1,173 @@
+# Validation
+
+Grid v0.1 (`out-v0.1`, built 2026-11-11) against ERA5 1991–2020 normals at
+22 cities covering every Köppen main group. Regenerate this table after a
+grid change; the commands are in `examples/validation.rs`.
+
+## Method
+
+- **Reference**: ERA5 daily `temperature_2m_min`, `temperature_2m_max` and
+  `precipitation_sum`, 1991-01-01 to 2020-12-31, from the Open-Meteo
+  archive API (default model, GMT days). Each city was fetched once,
+  with requests at least 65 s apart. The raw responses are kept outside the
+  repository; the monthly normals are committed as
+  `tests/fixtures/era5-normals.json`.
+- **ERA5 values**: monthly mean daily minimum and maximum, and monthly
+  precipitation totals, averaged over the 30 years.
+  - `tmin_cold` is the lowest monthly mean minimum, and `tmax_warm` the highest
+    monthly mean maximum.
+  - Monthly means are (min + max) / 2.
+  - Aridity, dry months and the Köppen class are computed by this crate
+    from those normals.
+- **Grid values**: `lookup` at the city's coordinates (radius 2). Every city
+  falls in a complete cell (distance 0).
+- **Tolerances**: ±1.5 °C for the four temperatures, ±40 % for annual
+  precipitation. Misses are in bold.
+- **The comparison is not like for like.**
+  - The grid gives the mean of a 0.1° cell (about 11 × 8 km at 45°).
+  - Open-Meteo gives one ERA5 grid point, corrected to the elevation it
+    reports (shown in the explanations).
+  - In mountains, on coasts and on ice, the two can differ by more than the
+    tolerance even when both are right.
+  - ERA5 is itself a model: it is known to be wet over tropical mountains and
+    to struggle with winter inversions and small coastal features.
+
+## Results
+
+| City | Köppen grid / ERA5 | tmin_cold | tmax_warm | tmean_cold | tmean_warm | precip mm | aridity | dry months | misses |
+|---|---|---|---|---|---|---|---|---|---|
+| Paris | Cfb / Cfb | 1.6 / 1.4 (+0.2) | 24.0 / 24.4 (-0.4) | 4.8 / 4.4 (+0.4) | 20.1 / 19.5 (+0.6) | 644 / 670 (-4%) | 0.92 / 0.98 | 0 / 0 | - |
+| Lyon | Cfa / Cfb | 0.1 / 0.3 (-0.2) | 26.6 / 26.6 (+0.0) | 4.3 / 3.6 (+0.6) | 22.4 / 21.4 (+1.0) | 809 / 945 (-14%) | 1.10 / 1.34 | 0 / 0 | - |
+| Seville | Csa / Csa | 5.8 / 6.0 (-0.2) | 34.8 / 35.4 (-0.6) | 11.0 / 10.7 (+0.3) | 27.8 / 28.3 (-0.5) | 566 / 479 (+18%) | 0.58 / 0.49 | 5 / 5 | - |
+| Montpellier | Csa / Csa | 4.0 / 3.8 (+0.2) | 28.5 / 28.5 (+0.0) | 7.8 / 7.3 (+0.5) | 24.1 / 23.6 (+0.5) | 781 / 838 (-7%) | 0.97 / 1.07 | 2 / 3 | - |
+| Berlin | Cfb / Cfb | -1.5 / -1.8 (+0.3) | 23.7 / 23.9 (-0.2) | 1.0 / 0.7 (+0.3) | 19.7 / 19.3 (+0.4) | 584 / 605 (-3%) | 0.88 / 0.92 | 0 / 0 | - |
+| Nairobi | Aw / Csb | 12.3 / 12.3 (+0.0) | 26.5 / 27.0 (-0.5) | 17.6 / 17.1 (+0.5) | 21.1 / 21.1 (+0.0) | 889 / 656 (+36%) | 1.02 / 0.76 | 5 / 5 | - |
+| São Paulo | Cfa / Cfa | 12.4 / 12.2 (+0.2) | 27.0 / 26.8 (+0.2) | 16.5 / 16.9 (-0.4) | 22.8 / 23.0 (-0.2) | 1438 / 1288 (+12%) | 1.57 / 1.39 | 0 / 1 | - |
+| Manaus | Af / Af | 24.0 / 23.5 (+0.5) | 31.2 / 31.1 (+0.1) | 26.7 / 26.3 (+0.4) | 28.3 / 27.9 (+0.4) | 2270 / 2694 (-16%) | 1.30 / 1.61 | 0 / 0 | - |
+| Mumbai | Am / Aw | 21.0 / 18.7 (+2.3) **miss** | 30.4 / 32.7 (-2.3) **miss** | 24.3 / 24.0 (+0.3) | 29.9 / 29.5 (+0.4) | 2513 / 1924 (+31%) | 1.48 / 1.17 | 7 / 7 | tmin_cold, tmax_warm |
+| Tokyo | Cfa / Cfa | 0.2 / -0.3 (+0.5) | 29.3 / 29.7 (-0.4) | 5.0 / 4.0 (+1.0) | 27.2 / 26.6 (+0.6) | 1566 / 1465 (+7%) | 1.84 / 1.80 | 0 / 0 | - |
+| Phoenix | BWh / BWh | 5.2 / 4.8 (+0.4) | 41.6 / 41.5 (+0.1) | 12.6 / 11.7 (+0.9) | 35.0 / 34.8 (+0.2) | 189 / 249 (-24%) | 0.14 / 0.20 | 12 / 9 | - |
+| Hobart | Cfb / Cfb | 4.6 / 5.0 (-0.4) | 21.3 / 22.2 (-0.9) | 8.2 / 8.3 (-0.1) | 16.8 / 17.6 (-0.8) | 583 / 611 (-5%) | 0.87 / 0.90 | 0 / 0 | - |
+| Reykjavik | Cfc / Dfc | -4.4 / -3.5 (-0.9) | 14.3 / 14.5 (-0.2) | 0.6 / -1.0 (+1.6) **miss** | 12.0 / 11.6 (+0.4) | 1101 / 1354 (-19%) | 1.93 / 2.54 | 0 / 0 | tmean_cold |
+| Yakutsk | Dfc / Dwc | -39.6 / -39.3 (-0.3) | 24.4 / 24.9 (-0.5) | -37.6 / -36.1 (-1.5) | 19.4 / 19.7 (-0.3) | 252 / 232 (+9%) | 0.48 / 0.44 | 1 / 0 | - |
+| Cairo | BWh / BWh | 8.2 / 7.9 (+0.3) | 36.2 / 36.8 (-0.6) | 13.8 / 13.5 (+0.3) | 29.2 / 29.2 (+0.0) | 23 / 18 (+29%) | 0.02 / 0.02 | 12 / 12 | - |
+| Lima | BWh / BWh | 14.9 / 15.1 (-0.2) | 24.9 / 26.2 (-1.3) | 17.9 / 17.8 (+0.1) | 23.4 / 23.6 (-0.2) | 32 / 85 (-62%) **miss** | 0.03 / 0.09 | 12 / 12 | precip |
+| Singapore | Af / Af | 24.7 / 23.9 (+0.8) | 29.2 / 29.2 (-0.0) | 26.4 / 25.9 (+0.5) | 27.9 / 27.2 (+0.7) | 2404 / 2641 (-9%) | 1.39 / 1.60 | 0 / 0 | - |
+| Ulaanbaatar | Dwc / Dwc | -28.9 / -25.7 (-3.2) **miss** | 20.7 / 23.6 (-2.9) **miss** | -23.0 / -19.2 (-3.8) **miss** | 16.6 / 17.8 (-1.2) | 300 / 321 (-6%) | 0.68 / 0.66 | 0 / 0 | tmin_cold, tmax_warm, tmean_cold |
+| Cape Town | Csb / Csb | 10.5 / 9.2 (+1.3) | 22.1 / 25.9 (-3.8) **miss** | 12.9 / 12.8 (+0.1) | 20.4 / 21.7 (-1.3) | 703 / 495 (+42%) **miss** | 0.90 / 0.61 | 5 / 6 | tmax_warm, precip |
+| Quito | Csb / Cfb | 9.7 / 8.2 (+1.5) **miss** | 18.8 / 17.3 (+1.5) | 13.6 / 12.2 (+1.4) | 14.1 / 12.8 (+1.3) | 1152 / 2876 (-60%) **miss** | 1.71 / 4.48 | 1 / 0 | tmin_cold, precip |
+| Nuuk | ET / ET | -16.2 / -17.4 (+1.2) | 9.6 / 12.1 (-2.5) **miss** | -10.9 / -14.3 (+3.4) **miss** | 7.3 / 9.0 (-1.7) **miss** | 996 / 809 (+23%) | 2.47 / 2.07 | 0 / 0 | tmax_warm, tmean_cold, tmean_warm |
+| Longyearbyen | ET / ET | -17.3 / -16.5 (-0.8) | 6.0 / 8.0 (-2.0) **miss** | -13.9 / -14.1 (+0.2) | 5.1 / 6.5 (-1.4) | 365 / 432 (-16%) | 0.76 / 0.93 | 0 / 0 | tmax_warm |
+
+Columns give grid / ERA5 (grid − ERA5). The Köppen class of the grid is
+Beck et al.'s published class (`docs/decisions/0002-koppen-class-vs-monthly-means.md`);
+the ERA5 class is computed from the ERA5 monthly normals.
+
+### Summary
+
+| | within tolerance | mean grid − ERA5 | mean absolute difference |
+|---|---|---|---|
+| `tmin_cold` | 19 / 22 | +0.16 °C | 0.73 °C |
+| `tmax_warm` | 17 / 22 | −0.77 °C | 0.95 °C |
+| `tmean_cold` | 19 / 22 | +0.33 °C | 0.86 °C |
+| `tmean_warm` | 21 / 22 | −0.05 °C | 0.64 °C |
+| `precip` | 19 / 22 | median −4 % | |
+| Köppen class | same at 16 / 22 | | |
+
+14 of the 22 cities have no miss. The baseline shift (CHELSA 1981–2010 moved
+to 1991–2020) removed the cold bias the prototype showed: Paris and Berlin
+`tmin_cold` are now within 0.3 °C of ERA5.
+
+### Misses explained
+
+- **Mumbai** (`tmin_cold` +2.3, `tmax_warm` −2.3): the monthly means agree
+  (+0.3 / +0.4), so the grid's diurnal range is too small.
+  - The cell (19.05 N, 72.85 E) is mostly sea and peninsula.
+  - CHELSA's minimum and maximum over its land pixels are damped by the sea,
+    while the ERA5 point (elevation 6 m) is a land point.
+  - Use the grid's extremes with care on narrow coasts.
+- **Reykjavik** (`tmean_cold` +1.6): just outside the tolerance.
+  - The cell lies on the coast and is mild in winter.
+  - ERA5 classifies the city as Dfc, the grid (Beck) as Cfc: the coldest
+    month sits near the 0 °C C/D boundary in both sources.
+- **Lima** (precipitation −62 %): 32 mm against 85 mm a year.
+  - In a hyper-arid climate a relative tolerance is meaningless; both say
+    desert (BWh, 12 dry months).
+  - ERA5 is known to overestimate drizzle there.
+- **Ulaanbaatar** (`tmin_cold` −3.2, `tmax_warm` −2.9, `tmean_cold` −3.8):
+  the grid is colder all year.
+  - The cell includes the mountains around the valley (the ERA5 point is
+    corrected to 1,300 m).
+  - The winter inversion over the Mongolian plateau is hard for both
+    sources: cold air pools in the valley, but ERA5 tends to be too warm in
+    strong inversions.
+  - Precipitation agrees (−6 %).
+- **Cape Town** (`tmax_warm` −3.8, precipitation +42 %): the cell
+  (33.95 S, 18.45 E) includes Table Mountain and the Atlantic shore.
+  - Both are cooler in summer and the mountain is much wetter than the ERA5
+    point on the Cape Flats (17 m).
+- **Quito** (`tmin_cold` +1.5, precipitation −60 %):
+  - Temperatures: the city lies on a slope at 2,800–2,900 m (ERA5 corrected
+    to 2,920 m), and the cell averages lower and warmer terrain, so all four
+    temperatures run 1.3–1.5 °C warmer.
+  - Precipitation: ERA5 (2,876 mm) is known to be too wet over the tropical
+    Andes; the grid's 1,152 mm is the more plausible value for the city.
+- **Nuuk** (`tmax_warm` −2.5, `tmean_cold` +3.4, `tmean_warm` −1.7): the cell
+  mixes fjord water, coast and mountains.
+  - Its winter is milder (sea influence) and its summer cooler than the ERA5
+    land point (7 m).
+  - Both sources are coarse for Greenland's coast, but agree on ET.
+- **Longyearbyen** (`tmax_warm` −2.0): the cell includes glaciers and
+  mountains above the town, which are cooler in summer.
+
+Cities without misses still show the usual offsets: Lyon, Phoenix and Tokyo
+are within tolerance but 0.9–1.0 °C warmer in their coldest or warmest month
+than ERA5. Precipitation is the weakest variable: products disagree by tens
+of percent at a point. `build-report.json` compares Beck with CHELSA bio12
+over all land: median −14 %, 5th–95th percentile −50 % to +21 %. Treat
+`precip` and `aridity` as estimates.
+
+## Future periods
+
+The Open-Meteo CMIP6 API was used for 8 cities and one model
+(EC_Earth3P_HR, high-resolution HighResMIP run). Its free hourly limit did not
+allow more. The model covers 1991–2050 only, so its 2021–2050 change is
+compared with the grid's 2041–2070 change. This is a check of sign and order
+of magnitude only, not a tolerance test.
+
+| City | EC_Earth3P_HR 2021-2050 minus 1991-2020: coldest / warmest month (°C) | grid 2041-2070 SSP2-4.5 | grid 2041-2070 SSP5-8.5 |
+|---|---|---|---|
+| paris | +0.8 / +1.5 | +1.1 / +1.8 | +1.6 / +2.5 |
+| lyon | +0.7 / +1.8 | +1.2 / +2.2 | +1.8 / +3.1 |
+| seville | +0.8 / +1.3 | +1.1 / +1.8 | +1.5 / +2.5 |
+| montpellier | +0.5 / +1.8 | +1.2 / +2.2 | +1.7 / +3.1 |
+| berlin | +1.0 / +1.4 | +1.6 / +1.9 | +2.1 / +2.6 |
+| nairobi | +1.1 / +0.6 | +1.3 / +1.3 | +1.8 / +1.7 |
+| sao-paulo | +0.8 / +0.7 | +1.4 / +1.1 | +1.9 / +1.7 |
+| manaus | +0.8 / +1.2 | +1.4 / +1.9 | +1.9 / +2.8 |
+
+The model's earlier period (centred 2035 vs 2055) warms less than the grid,
+as expected. Sign and seasonality agree, for example Nairobi's coldest month
+warming more than its warmest month.
+
+Over all land, the `check-future` stage compares the grid's 2041–2070
+SSP3-7.0 `tmin_cold` with the mean of CHELSA V2.1's own bio6 projections for
+five GCMs (GFDL-ESM4, IPSL-CM6A-LR, MPI-ESM1-2-HR, MRI-ESM2-0, UKESM1-0-LL).
+The grid's change is 0.69 °C smaller on average (median 0.51 °C; 5th–95th
+percentile −2.28 to +0.22 °C). Beck et al.'s ensemble is constrained to models
+that reproduce observed warming, which excludes the hottest models, and two
+of CHELSA's five GCMs (UKESM1-0-LL, IPSL-CM6A-LR) are among the
+warmest. The grid's futures are therefore on the moderate side of CMIP6.
+
+## Tests
+
+- `tests/validation.rs::era5_classes_are_reproducible` recomputes the ERA5
+  classes and summaries from the committed normals. It runs in CI.
+- `tests/validation.rs::grid_matches_expected` (ignored) checks a built grid.
+  It requires every city's lookup to equal `tests/fixtures/validation-expected.json`
+  and the set of misses to equal the one documented here:
+
+```sh
+CANOPI_CLIMATE_GRID=/media/daylon/main_hdd/canopi-cache/climate/out-v0.1 \
+  cargo test --release --features pipeline --test validation -- --ignored
+```
