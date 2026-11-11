@@ -390,8 +390,8 @@ fn finish(cfg: &BuildConfig, specs: Vec<TileSpec>, slot_stats: Value, checks: Va
     let text = serde_json::to_string_pretty(&m).map_err(|e| PipelineError::Data(e.to_string()))?;
     let mpath = cfg.out.join("manifest.json");
     std::fs::write(&mpath, text + "\n").map_err(|e| PipelineError::io(&mpath, e))?;
-    write_sums(&cfg.out, &m)?;
     write_attribution(&cfg.out)?;
+    write_sums(&cfg.out, &m)?;
     eprintln!(
         "tiles: {} files, {:.1} MiB, max {} B, {complete} complete cells",
         m.tiles.len(),
@@ -406,10 +406,14 @@ fn write_json_file(path: &Path, v: &Value) -> Result<()> {
     std::fs::write(path, s + "\n").map_err(|e| PipelineError::io(path, e))
 }
 
-/// `SHA256SUMS` over the manifest, the report and every tile.
+/// Release files listed in `SHA256SUMS` besides the tiles.
+const SUMMED: [&str; 3] = ["manifest.json", "build-report.json", "ATTRIBUTION.md"];
+
+/// `SHA256SUMS` over the manifest, the report, the attribution and every
+/// tile.
 fn write_sums(out: &Path, m: &Manifest) -> Result<()> {
     let mut lines = Vec::new();
-    for name in ["manifest.json", "build-report.json"] {
+    for name in SUMMED {
         lines.push(format!("{}  {name}", sha256_file(&out.join(name))?));
     }
     for t in &m.tiles {
@@ -594,6 +598,26 @@ mod tests {
         let (v, c) = encode_cell(1, &[14, 14], &beck, &base);
         assert_eq!(c, Clamped::default());
         assert_eq!((v[1], v[2]), (-50, 300));
+    }
+
+    #[test]
+    fn sums_cover_every_release_file() {
+        let dir = std::env::temp_dir().join(format!("canopi-climate-sums-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["manifest.json", "build-report.json"] {
+            std::fs::write(dir.join(f), "{}").unwrap();
+        }
+        write_attribution(&dir).unwrap();
+        let m = manifest(vec![]);
+        write_sums(&dir, &m).unwrap();
+        let sums = std::fs::read_to_string(dir.join("SHA256SUMS")).unwrap();
+        for f in ["manifest.json", "build-report.json", "ATTRIBUTION.md"] {
+            let want = format!("{}  {f}", sha256_file(&dir.join(f)).unwrap());
+            assert!(
+                sums.lines().any(|l| l == want),
+                "{f} missing from SHA256SUMS"
+            );
+        }
     }
 
     #[test]
