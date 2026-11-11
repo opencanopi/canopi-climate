@@ -111,29 +111,50 @@ impl Tile {
     /// # Errors
     /// [`TileError`] when the bytes are not a grid tile.
     pub fn decode(bytes: &[u8]) -> Result<Self, TileError> {
-        let mut d = Decoder::new(Cursor::new(bytes))?;
-        let (w, h) = d.dimensions()?;
-        if (w as usize, h as usize) != (TILE_CELLS, TILE_CELLS) {
-            return Err(TileError::Layout(format!("{w}x{h}, expected 100x100")));
-        }
-        let id = georef_tile(&mut d)?;
-        let data = match d.read_image()? {
-            DecodingResult::I16(v) => v,
-            _ => return Err(TileError::Layout("samples are not int16".into())),
-        };
-        if data.len() != TILE_LEN * BANDS {
-            return Err(TileError::Layout(format!(
-                "{} samples, expected {} bands",
-                data.len() / TILE_LEN,
-                BANDS
-            )));
-        }
+        let (id, data) = decode_raster(bytes, TILE_CELLS, CELL_DEG, BANDS)?;
         Ok(Self { id, data })
     }
 }
 
+/// Decode a tile-shaped `int16` GeoTIFF: `side` x `side` cells of
+/// `cell_deg` degrees, `bands` pixel-interleaved samples per cell, origin
+/// on a tile corner. Shared by the climate tiles and the site layers.
+///
+/// # Errors
+/// [`TileError`] when the bytes are not such a raster.
+pub(crate) fn decode_raster(
+    bytes: &[u8],
+    side: usize,
+    cell_deg: f64,
+    bands: usize,
+) -> Result<(TileId, Vec<i16>), TileError> {
+    let mut d = Decoder::new(Cursor::new(bytes))?;
+    let (w, h) = d.dimensions()?;
+    if (w as usize, h as usize) != (side, side) {
+        return Err(TileError::Layout(format!(
+            "{w}x{h}, expected {side}x{side}"
+        )));
+    }
+    let id = georef_tile(&mut d, cell_deg)?;
+    let data = match d.read_image()? {
+        DecodingResult::I16(v) => v,
+        _ => return Err(TileError::Layout("samples are not int16".into())),
+    };
+    let cells = side * side;
+    if data.len() != cells * bands {
+        return Err(TileError::Layout(format!(
+            "{} samples per cell, expected {bands} bands",
+            data.len() as f64 / cells as f64
+        )));
+    }
+    Ok((id, data))
+}
+
 /// The tile named by the GeoTIFF pixel scale and tie point.
-fn georef_tile<R: std::io::Read + std::io::Seek>(d: &mut Decoder<R>) -> Result<TileId, TileError> {
+fn georef_tile<R: std::io::Read + std::io::Seek>(
+    d: &mut Decoder<R>,
+    cell_deg: f64,
+) -> Result<TileId, TileError> {
     let scale = d
         .find_tag(Tag::ModelPixelScaleTag)?
         .ok_or_else(|| TileError::Georef("no ModelPixelScale".into()))?
@@ -145,15 +166,15 @@ fn georef_tile<R: std::io::Read + std::io::Seek>(d: &mut Decoder<R>) -> Result<T
     let (Some(&sx), Some(&sy)) = (scale.first(), scale.get(1)) else {
         return Err(TileError::Georef("short ModelPixelScale".into()));
     };
-    if (sx - CELL_DEG).abs() > 1e-9 || (sy - CELL_DEG).abs() > 1e-9 {
+    if (sx - cell_deg).abs() > 1e-9 || (sy - cell_deg).abs() > 1e-9 {
         return Err(TileError::Georef(format!("pixel size {sx} x {sy}")));
     }
     let [i, j, _, x, y, ..] = tie.as_slice() else {
         return Err(TileError::Georef("short ModelTiepoint".into()));
     };
-    let west = x - i * CELL_DEG;
-    let north = y + j * CELL_DEG;
-    let id = TileId::of(north - CELL_DEG / 2.0, west + CELL_DEG / 2.0)
+    let west = x - i * cell_deg;
+    let north = y + j * cell_deg;
+    let id = TileId::of(north - cell_deg / 2.0, west + cell_deg / 2.0)
         .ok_or_else(|| TileError::Georef(format!("origin {west}, {north}")))?;
     if (id.west() - west).abs() > 1e-6 || (id.north() - north).abs() > 1e-6 {
         return Err(TileError::Georef(format!(

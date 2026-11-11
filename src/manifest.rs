@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 
 /// Format identifier written in every manifest.
 pub const FORMAT: &str = "canopi-climate-grid";
-/// Current manifest/tile format version.
-pub const FORMAT_VERSION: u32 = 1;
+/// Current manifest/tile format version. Version 2 adds [`Manifest::layers`]
+/// (soil, regions); readers accept [`MIN_FORMAT_VERSION`] and later.
+pub const FORMAT_VERSION: u32 = 2;
+/// Oldest manifest version this build reads (version 1: climate only).
+pub const MIN_FORMAT_VERSION: u32 = 1;
 
 /// The manifest of a grid release.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +32,35 @@ pub struct Manifest {
     /// Source datasets.
     pub sources: Vec<SourceSpec>,
     /// Tiles with land cells.
+    pub tiles: Vec<TileSpec>,
+    /// Notes on methods and known limits.
+    pub notes: Vec<String>,
+    /// Site layers on the finer layer grid (absent in version 1).
+    #[serde(default)]
+    pub layers: Vec<LayerSpec>,
+}
+
+/// A site layer: its own tiles, in the climate grid's 10-degree tiles on
+/// a finer grid (see `crate::layer`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerSpec {
+    /// Identifier: `soil` or `regions`.
+    pub id: String,
+    /// What the layer holds.
+    pub description: String,
+    /// Cell size (degrees).
+    pub cell_deg: f64,
+    /// Cells per tile side.
+    pub tile_cells: u32,
+    /// Directory of the tiles, relative to the manifest.
+    pub directory: String,
+    /// How tiles encode values.
+    pub encoding: Encoding,
+    /// Bands in order (`scale`/`offset` decode the stored value).
+    pub bands: Vec<VariableSpec>,
+    /// Ids of the [`Manifest::sources`] the layer derives from.
+    pub sources: Vec<String>,
+    /// Tiles with data (`complete_cells`: cells with a value).
     pub tiles: Vec<TileSpec>,
     /// Notes on methods and known limits.
     pub notes: Vec<String>,

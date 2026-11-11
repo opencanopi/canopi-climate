@@ -25,9 +25,12 @@
 pub mod derived;
 pub mod grid;
 pub mod koppen;
+pub mod layer;
 pub mod lookup;
 pub mod manifest;
 pub mod model;
+pub mod regions;
+pub mod soil;
 pub mod tile;
 
 #[cfg(feature = "pipeline")]

@@ -529,6 +529,7 @@ pub fn manifest(tiles: Vec<TileSpec>) -> Manifest {
         sources: sources::manifest_sources(),
         tiles,
         notes: notes(),
+        layers: Vec::new(),
     }
 }
 

@@ -89,7 +89,7 @@ impl Cell {
 }
 
 /// `floor(x)` clamped to `0..n`, tolerant of decimal rounding.
-fn grid_index(x: f64, n: usize) -> usize {
+pub(crate) fn grid_index(x: f64, n: usize) -> usize {
     let i = (x + EPS).floor();
     if i <= 0.0 {
         0
