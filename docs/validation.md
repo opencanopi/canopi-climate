@@ -153,8 +153,12 @@ warming more than its warmest month.
 Over all land, the `check-future` stage compares the grid's 2041–2070
 SSP3-7.0 `tmin_cold` with the mean of CHELSA V2.1's own bio6 projections for
 five GCMs (GFDL-ESM4, IPSL-CM6A-LR, MPI-ESM1-2-HR, MRI-ESM2-0, UKESM1-0-LL).
-The grid's change is 0.69 °C smaller on average (median 0.51 °C; 5th–95th
-percentile −2.28 to +0.22 °C). Beck et al.'s ensemble is constrained to models
+Measured from the same 1981–2010 baseline (CHELSA bio6), the grid's change
+is 0.45 °C smaller on average (median 0.32 °C; grid − CHELSA from −1.85 to
++0.33 °C at the 5th and 95th percentiles). With one baseline, the difference
+of the changes equals the difference of the 2041–2070 values. The grid's own
+change from 1991–2020 is not comparable to CHELSA's change, which starts 10
+years earlier. Beck et al.'s ensemble is constrained to models
 that reproduce observed warming, which excludes the hottest models, and two
 of CHELSA's five GCMs (UKESM1-0-LL, IPSL-CM6A-LR) are among the
 warmest. The grid's futures are therefore on the moderate side of CMIP6.

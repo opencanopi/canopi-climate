@@ -466,24 +466,31 @@ fn stage_check_future(cfg: &BuildConfig) -> Result<()> {
         .ok_or_else(|| PipelineError::Data("no 2041-2070 SSP3-7.0 slot".into()))?;
     let fut = raster::read_f32(&beck_path(&cfg.work, &slot_key(SLOTS[slot])))?;
     let land = raster::read_u8(&koppen_path(&cfg.work, "1991_2020"))?;
-    let mut d_value = Vec::new();
-    let mut d_change = Vec::new();
-    for i in 0..n {
-        let ours = base.tmin(i, fut[beck_band::TCOLD][i]);
-        let (c, b6) = (chelsa_future[i], base.bio6[i]);
-        if land[i] > 0 && ours.is_finite() && c.is_finite() && b6.is_finite() {
-            d_value.push(ours - c);
-            d_change.push((ours - base.tmin(i, base.tcold_now[i])) - (c - b6));
-        }
-    }
-    let v = json!({
-        "what": "2041-2070 SSP3-7.0 tmin_cold: grid (CHELSA 1981-2010 + baseline shift + Beck ensemble change) minus the mean of CHELSA's own bio6 projections for 5 GCMs",
-        "gcms": gcms,
-        "value_difference_c": diff_stats(&mut d_value),
-        "change_difference_c": diff_stats(&mut d_change),
-    });
+    let ours: Vec<f32> = (0..n)
+        .map(|i| base.tmin(i, fut[beck_band::TCOLD][i]))
+        .collect();
+    let mut v = future_check(&ours, &chelsa_future, &base.bio6, &land);
+    v["gcms"] = json!(gcms);
     eprintln!("check-future: {v}");
     write_json(&out, &v)
+}
+
+/// Grid 2041-2070 `tmin_cold` against CHELSA's own projection, both
+/// measured from the same 1981-2010 baseline (CHELSA bio6): the change
+/// difference `(ours - bio6) - (chelsa - bio6)` equals the value difference.
+/// The grid's own change from 1991-2020 is not compared: CHELSA's change
+/// starts 10 years earlier.
+fn future_check(ours: &[f32], chelsa: &[f32], bio6: &[f32], land: &[u8]) -> Value {
+    let mut d: Vec<f32> = (0..ours.len())
+        .filter(|&i| {
+            land[i] > 0 && ours[i].is_finite() && chelsa[i].is_finite() && bio6[i].is_finite()
+        })
+        .map(|i| (ours[i] - bio6[i]) - (chelsa[i] - bio6[i]))
+        .collect();
+    json!({
+        "what": "2041-2070 SSP3-7.0 tmin_cold: grid (CHELSA 1981-2010 + baseline shift + Beck ensemble change) minus the mean of CHELSA's own bio6 projections for 5 GCMs; equal to the difference of the two changes from CHELSA's 1981-2010 baseline",
+        "difference_c": diff_stats(&mut d),
+    })
 }
 
 /// Summary of a JSON file for the build report (`null` when absent).
@@ -560,6 +567,19 @@ mod tests {
         assert!(grid_orientation(&north[1..], &lon).is_err());
         let east: Vec<f64> = (0..GRID_W).map(|i| 0.05 + 0.1 * i as f64).collect();
         assert!(grid_orientation(&north, &east).is_err());
+    }
+
+    #[test]
+    fn future_check_uses_one_baseline() {
+        // Grid warms 2.0 from bio6, CHELSA 2.5: the change difference is
+        // -0.5 whatever the 1991-2020 shift; ocean cells are skipped.
+        let bio6 = [-10.0, 5.0, 0.0];
+        let ours = [-8.0, 7.0, 99.0];
+        let chelsa = [-7.5, 7.5, 0.0];
+        let v = future_check(&ours, &chelsa, &bio6, &[1, 1, 0]);
+        assert_eq!(v["difference_c"]["n"], 2);
+        assert_eq!(v["difference_c"]["mean"], -0.5);
+        assert!(v.get("change_difference_c").is_none());
     }
 
     #[test]
