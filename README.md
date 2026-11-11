@@ -19,6 +19,20 @@ scenarios (SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP5-8.5):
 No hardiness zone is derived: `tmin_cold` is a monthly mean, not the annual
 extreme minimum that USDA zones need.
 
+Two site layers, on a finer 0.05° grid (about 5.5 km) in the same 10° tiles,
+describe the place itself:
+
+| Layer | Field | Unit | Meaning |
+|---|---|---|---|
+| soil | `ph_h2o` | pH | pH in water, 0–30 cm (SoilGrids 2.0, depth-weighted 0–5, 5–15, 15–30 cm) |
+| soil | `sand_pct`, `clay_pct`, `silt_pct` | % | particle-size fractions, 0–30 cm (silt = 100 − sand − clay) |
+| soil | `texture` | class | USDA texture class (`loam`, `silty_clay_loam`, …), derived at lookup |
+| soil | `filled`, `fill_distance_cells` | –, cells | SoilGrids has no value on towns, water and ice; land cells within 8 cells of a measured cell take its values, and say how far it was |
+| regions | `wgsrpd_l3` | code | WGSRPD level-3 botanical country (`FRA`, `BZL`, …; 369 areas), the scheme of WCVP native ranges |
+| regions | `iso_a2` | code | country, ISO 3166-1 alpha-2 (Natural Earth 1:50m) |
+
+Regions carry codes only, no names.
+
 The crate is written in Rust. It reads a tiled grid of 0.1° cells (about 11 km
 at the equator): one Cloud Optimized GeoTIFF per 10° × 10° tile, and a
 `manifest.json` that describes the variables, scale/offset, periods,
@@ -54,39 +68,75 @@ complete cell within 2 cells inside the same tile (the CLI and `sample`
 also search the neighbouring tiles). It returns `None` at sea or
 when no cell nearby has data. A missing tile file means the tile has no land.
 
+The site layers work the same way, with their own tile files of the same
+name:
+
+```rust
+use canopi_climate::{regions, soil};
+
+let soil_tile = soil::decode(&std::fs::read(format!("grid/soil/{}", id.file_name()))?)?;
+if let Some(s) = soil::lookup(&soil_tile, lat, lon)? {     // None: no soil within 2 cells
+    println!("pH {} {:?} filled={}", s.ph_h2o, s.texture, s.filled);
+}
+let regions_tile = regions::decode(&std::fs::read(format!("grid/regions/{}", id.file_name()))?)?;
+let r = regions::lookup(&regions_tile, lat, lon)?;          // fields None at sea
+println!("{:?} {:?}", r.wgsrpd_l3, r.iso_a2);              // Some("FRA") Some("FR")
+```
+
+`soil::texture_class(sand_pct, clay_pct)` classifies any fractions. The
+`lookup_across` variants search across tile edges.
+
 ### JavaScript (WebAssembly)
 
 ```js
-import init, { tileName, lookup } from "./pkg/canopi_climate.js";
+import init, { tileName, lookup, lookupSoil, lookupRegions, textureClass } from "./pkg/canopi_climate.js";
 await init();
 const name = tileName(lat, lon);                    // "n50e000.tif", or undefined
-const res = await fetch(`/climate/tiles/${name}`);  // 404: no land in the tile
-const climate = res.ok ? lookup(new Uint8Array(await res.arrayBuffer()), lat, lon) : null;
+const get = async (dir) => {                        // 404: the layer has no data in the tile
+  const res = await fetch(`/climate/${dir}/${name}`);
+  return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+};
+const tiles = await get("tiles"), soilTile = await get("soil"), regionsTile = await get("regions");
+const climate = tiles ? lookup(tiles, lat, lon) : null;
+const soil = soilTile ? lookupSoil(soilTile, lat, lon) : null;
+const regions = regionsTile ? lookupRegions(regionsTile, lat, lon) : null;  // { wgsrpd_l3, iso_a2, ... }
 ```
 
-The result is a plain object with the fields of `Lookup`
-(`koppen`, `tmin_cold_c`, …, one entry per period and scenario), or `null`.
+The results are plain objects with the fields of `Lookup` (`koppen`,
+`tmin_cold_c`, …, one entry per period and scenario), `SoilLookup` and
+`RegionsLookup`, or `null`. One location fetches three tiles: in the v0.2
+build the median climate tile is 125 KB, soil 45 KB and regions 1.4 KB.
 
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.1          # JSON
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.2          # JSON: climate, soil, regions
 canopi-climate sample points.csv --grid out-v0.1 -o climate.csv
 canopi-climate verify-grid out-v0.1                           # sizes and SHA-256
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 
+`lookup` prints `{"climate": …, "soil": …, "regions": …}`; each part is
+`null` when absent (exit code 2 when all are). For Paris:
+
+```json
+"soil": { "ph_h2o": 6.0, "sand_pct": 28.3, "clay_pct": 25.2, "silt_pct": 46.5, "texture": "loam",
+          "filled": true, "fill_distance_cells": 3, "depth": "0-30 cm", "cell_lat": 48.875, ... },
+"regions": { "wgsrpd_l3": "FRA", "iso_a2": "FR", "wgsrpd_l3_distance_cells": 0.0, ... }
+```
+
 `sample` reads a CSV with `lat`/`latitude` and `lon`/`lng`/`longitude`
 columns (and optionally `id`). It writes one row per point and
-period/scenario; points without data get one row with their status.
+period/scenario; points without data get one row with their status. It
+samples climate only.
 
 ## Features
 
 | Feature | Contents |
 |---|---|
-| default | grid geometry, tile decoding (`tiff` crate, Deflate only), lookup, Köppen classifier, derived measures, manifest types |
-| `pipeline` | grid builder and CLI: windowed GeoTIFF reading on `wbgeotiff`, NetCDF/HDF5 on `wbhdf`, pinned sources, aggregation, COG writer, sampling |
-| `wasm` | `wasm-bindgen` exports: `tileName`, `lookup`, `version` |
+| default | grid geometry, tile decoding (`tiff` crate, Deflate only), lookup, Köppen classifier, derived measures, soil and regions lookups, texture classes, manifest types |
+| `pipeline` | grid builder and CLI: windowed GeoTIFF reading on `wbgeotiff`, NetCDF/HDF5 on `wbhdf`, Homolosine on `proj4rs`, polygons on `geo`/`geojson`, pinned sources, aggregation, COG writer, sampling |
+| `wasm` | `wasm-bindgen` exports: `tileName`, `lookup`, `lookupSoil`, `lookupRegions`, `textureClass`, `version` |
 
 There are no C libraries, no GDAL and no HTTP client: the crate does not
 download anything.
@@ -104,19 +154,26 @@ download anything.
 ```sh
 cargo build --release --features pipeline
 B=target/release/canopi-climate
-$B build-grid --sources /data/climate --out out-v0.1 --stage verify
-$B build-grid --sources /data/climate --out out-v0.1 --stage koppen
-$B build-grid --sources /data/climate --out out-v0.1 --stage chelsa
-$B build-grid --sources /data/climate --out out-v0.1 --stage beck    # or --beck-period 2041_2070_ssp245 ...
-$B build-grid --sources /data/climate --out out-v0.1 --stage check-future   # optional, needs the 5 CHELSA GCM files
-$B build-grid --sources /data/climate --out out-v0.1 --stage tiles
-$B verify-grid out-v0.1
+$B build-grid --sources /data/climate --out out-v0.2 --stage verify
+$B build-grid --sources /data/climate --out out-v0.2 --stage koppen
+$B build-grid --sources /data/climate --out out-v0.2 --stage chelsa
+$B build-grid --sources /data/climate --out out-v0.2 --stage beck    # or --beck-period 2041_2070_ssp245 ...
+$B build-grid --sources /data/climate --out out-v0.2 --stage check-future   # optional, needs the 5 CHELSA GCM files
+$B build-grid --sources /data/climate --out out-v0.2 --stage tiles
+$B build-grid --sources /data/climate --out out-v0.2 --stage regions  # 25 s
+$B build-grid --sources /data/climate --out out-v0.2 --stage soil     # 10 s; needs regions (land mask)
+$B verify-grid out-v0.2
 ```
 
-The release directory holds `tiles/*.tif`, `manifest.json`, `SHA256SUMS`,
-`ATTRIBUTION.md` and `build-report.json`. The report counts land cells,
-the cells where the Köppen class contradicts the cell's own monthly means,
-clamped extremes, and source comparisons.
+The release directory holds `tiles/*.tif`, `soil/*.tif`, `regions/*.tif`,
+`manifest.json`, `SHA256SUMS`, `ATTRIBUTION.md` and `build-report.json`.
+The report counts land cells, the cells where the Köppen class contradicts
+the cell's own monthly means, clamped extremes, and source comparisons; its
+`layers` part counts the soil fill by distance, the land cells without soil
+per country, and region codes present, missing and set at an interior point.
+The `regions` and `soil` stages add their layer to the release written by
+`tiles` (and rewrite `manifest.json`, `ATTRIBUTION.md` and `SHA256SUMS`);
+`--force` rebuilds one.
 
 ### Method
 
@@ -133,8 +190,22 @@ clamped extremes, and source comparisons.
   minimum never exceeds the coldest-month mean and the maximum never falls
   below the warmest-month mean.
 
-See `docs/validation.md` for a comparison with ERA5 at 22 cities, and
-`docs/decisions/` for design decisions.
+- **Soil**: each 0.05° cell centre is projected to Interrupted Goode
+  Homolosine (twelve `proj4rs` sinusoidal/Mollweide lobes, equal to PROJ's
+  `igh` within 1 mm) and takes the SoilGrids 5-km pixel under it, for the
+  nine depth/variable files; then the 0–30 cm depth-weighted mean. Land
+  (any region code) without a value takes the nearest measured cell within
+  8 cells (about 44 km at the equator).
+- **Regions**: each cell takes the polygon that contains its centre. Areas
+  too small for any centre (islets, Monaco, Vatican, …) take the cell of
+  their interior point, so all 369 WGSRPD areas and all 237 Natural Earth
+  codes are present. Natural Earth's -99 codes are resolved from
+  `ISO_A2_EH` and `ADM0_A3` (Norway NO, France FR, Kosovo XK, Somaliland
+  SO, Northern Cyprus CY; Taiwan TW; Siachen has no code).
+
+See `docs/validation.md` for a comparison with ERA5 at 22 cities and the
+site-layer checks, and `docs/decisions/` for design decisions (0003: site
+layers).
 
 ## Data sources and licences
 
@@ -161,6 +232,21 @@ and their citations go with any use of it (`ATTRIBUTION.md` in each release).
   *Earth System Science Data* 14, 5573–5603.
   <https://doi.org/10.5194/essd-14-5573-2022>.
 
+- **SoilGrids 2.0**: pH (water), sand and clay, 0–5, 5–15 and 15–30 cm,
+  5-km aggregates of the mean prediction, licensed **CC BY 4.0**. Poggio, L.,
+  de Sousa, L. M., Batjes, N. H., Heuvelink, G. B. M., Kempen, B., Ribeiro, E.,
+  Rossiter, D. (2021). SoilGrids 2.0: producing soil information for the globe
+  with quantified spatial uncertainty. *SOIL* 7, 217–240.
+  <https://doi.org/10.5194/soil-7-217-2021>. Data: ISRIC,
+  <https://files.isric.org/soilgrids/latest/data_aggregated/5000m/>.
+- **Natural Earth** 1:50m Admin 0 – Countries, v5.1.2, **public domain**
+  ("Made with Natural Earth").
+- **WGSRPD** level 3: Brummitt, R. K. (2001). *World Geographical Scheme for
+  Recording Plant Distributions*, Edition 2. TDWG / Hunt Institute.
+  Geometry from <https://github.com/tdwg/wgsrpd> (commit f68afd9). The
+  repository declares no licence; the standard is published by TDWG for
+  reuse and is cited here. A licence statement from TDWG is a follow-up.
+
 The validation also uses ERA5 through the Open-Meteo archive API (Open-Meteo,
 CC BY 4.0; Hersbach et al. 2020, Copernicus Climate Change Service). It is not
 part of the grid.
@@ -174,10 +260,10 @@ cargo test && cargo test --features pipeline
 cargo build --target wasm32-unknown-unknown --profile wasm --features wasm
 wasm-bindgen --target nodejs --out-dir pkg-node target/wasm32-unknown-unknown/wasm/canopi_climate.wasm
 node scripts/wasm-smoke.cjs
-CANOPI_CLIMATE_GRID=out-v0.1 cargo test --release --features pipeline -- --ignored   # against a built grid
+CANOPI_CLIMATE_GRID=out-v0.2 cargo test --release --features pipeline -- --ignored   # against a built grid
 ```
 
 ## Licence
 
-AGPL-3.0-or-later (see `LICENSE`). Climate datasets keep their own licences
+AGPL-3.0-or-later (see `LICENSE`). Climate, soil and boundary datasets keep their own licences
 and citations (above, and `ATTRIBUTION.md` in each release).

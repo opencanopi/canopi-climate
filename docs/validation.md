@@ -163,6 +163,54 @@ that reproduce observed warming, which excludes the hottest models, and two
 of CHELSA's five GCMs (UKESM1-0-LL, IPSL-CM6A-LR) are among the
 warmest. The grid's futures are therefore on the moderate side of CMIP6.
 
+## Site layers
+
+### Soil
+
+Reference: `gdallocationinfo -wgs84` (GDAL 3.8.4, PROJ 9) on the nine
+SoilGrids files, at the layer cell centre, combined 5/10/15 over 0–30 cm
+and rounded like the tiles. The grid equals the reference in every value:
+
+| Point | Cell centre | pH (water) | Sand % | Clay % | Texture |
+|---|---|---|---|---|---|
+| Beauce (48.30, 1.75) | 48.275, 1.775 | 7.0 | 7.5 | 30.5 | silty clay loam |
+| Hérault (43.65, 3.55) | 43.625, 3.575 | 7.9 | 32.4 | 29.2 | clay loam |
+| Kenya highlands (-0.5, 37.0) | -0.525, 37.025 | 6.0 | 24.8 | 43.7 | clay |
+| São Paulo state (-22.0, -48.0) | -22.025, -47.975 | 5.3 | 37.4 | 45.6 | clay |
+
+Fiji and Chukotka (both sides of the antimeridian) were checked the same
+way. The prototype's reference values (Beauce ≈ 6.5, Hérault 7.1, Kenya
+5.6, São Paulo state 5.2) came from points whose coordinates were not kept;
+the grid's values at nearby rural points are in the same range (0.1–0.8
+higher), as expected for different 5-km pixels.
+
+Cities, which SoilGrids leaves empty, are filled from the nearest measured
+cell: Paris pH 6.0 (3 cells), Montpellier 7.7 (1), São Paulo 5.3 (2),
+Tokyo (4), Shanghai, Beijing and Buenos Aires (3). The Greenland and
+Antarctic ice sheets and the sea return no soil.
+
+### Regions
+
+| Point | `wgsrpd_l3` | `iso_a2` | Note |
+|---|---|---|---|
+| Paris | FRA | FR | Natural Earth ISO_A2 is -99; ISO_A2_EH is FR |
+| Oslo | NOR | NO | same |
+| São Paulo | BZL | BR | |
+| Nairobi | KEN | KE | |
+| Singapore | MLY | SG | WGSRPD puts Singapore in Malaya |
+| Monaco | FRA | MC | microstate smaller than a cell: interior-point cell |
+| Nicosia | CYP | CY | Northern Cyprus resolved to CY |
+| Hargeisa | SOM | SO | Somaliland resolved to SO |
+| Taipei | TAI | TW | ISO_A2 CN-TW, ISO_A2_EH TW |
+| Fiji, 178.0 E and 178.95 W | FIJ | FJ | antimeridian |
+| Chukotka, 178 E and 175 W | MAG | RU | antimeridian |
+| Reykjavik | ICE | IS | |
+| 2 cells off Boulogne-sur-Mer, Palavas, Cape Town | FRA/FRA/CPP | FR/FR/ZA | coastal points reach land within 2 cells |
+
+Vatican: Natural Earth 1:50m draws it about 1.5 km west of its real
+position, so a lookup at St Peter's returns IT; its own cell (at the
+polygon's interior point) holds VA.
+
 ## Tests
 
 - `tests/validation.rs::era5_classes_are_reproducible` recomputes the ERA5
@@ -172,6 +220,10 @@ warmest. The grid's futures are therefore on the moderate side of CMIP6.
   and the set of misses to equal the one documented here:
 
 ```sh
-CANOPI_CLIMATE_GRID=/media/daylon/main_hdd/canopi-cache/climate/out-v0.1 \
+CANOPI_CLIMATE_GRID=/media/daylon/main_hdd/canopi-cache/climate/out-v0.2 \
   cargo test --release --features pipeline --test validation -- --ignored
 ```
+
+- `tests/site_layers.rs` (ignored) checks the soil and regions points
+  above, the empty ice sheets, the coastal points and the release
+  checksums against a built grid (`--test site_layers`).

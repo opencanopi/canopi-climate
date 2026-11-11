@@ -1,4 +1,4 @@
-# Upstream gaps in the whitebox crates
+# Upstream gaps in the whitebox crates and proj4rs
 
 The pipeline uses `wbgeotiff` and `wbhdf` from
 [whitebox-wasm](https://github.com/opengeos/whitebox-wasm) at rev
@@ -25,3 +25,12 @@ follow-up; once they are merged, the workaround can go.
 | Chunk assembly assumes 2-D chunks | Beck's variables are 12 × 1800 × 3600 | N-D chunk placement in `netcdf::place_chunk` |
 | `read_chunked_storage_records_bounded_in_file` returns each leaf record many times (34,119 records for 1,944 chunks) and re-reads the whole file for every B-tree node | Decoding every record of one variable took more than 5 GB; the first capped build run was killed for out of memory | `netcdf::unique_chunks` keeps one record per chunk offset and fails when a chunk is listed at two addresses |
 | Dataset names are not resolved from link messages | Variables have no names | `netcdf::link_name_for` scans the link messages for the header address |
+
+## proj4rs
+
+`proj4rs` 0.3.0 (pinned) has no Interrupted Goode Homolosine (`+proj=igh`),
+the projection of SoilGrids 2.0.
+
+| Gap | Effect here | Workaround |
+|---|---|---|
+| No `igh` projection | SoilGrids pixels cannot be located | `src/pipeline/igh.rs` builds the twelve lobes from `proj4rs`'s `sinu` and `moll`, as PROJ's `igh.cpp` does; tested against PROJ 9 in every lobe (within 1 mm). Forward only. |
