@@ -27,14 +27,19 @@ fn source_offset(rows: &TiffRows, path: &Path) -> Result<usize> {
             rows.info.width
         )));
     }
+    north_shift(y0, px)
+        .ok_or_else(|| PipelineError::Data(format!("{}: north edge {y0}", path.display())))
+}
+
+/// Source rows above the first grid row: the north edge `y0` must sit at or
+/// below 90 N on a whole pixel of size `px`, within a quarter pixel (the
+/// same tolerance as the half-pixel west-edge check, halved).
+fn north_shift(y0: f64, px: f64) -> Option<usize> {
     let shift = (90.0 - y0) / px;
-    if shift < -0.5 || (shift - shift.round()).abs() > 0.5 {
-        return Err(PipelineError::Data(format!(
-            "{}: north edge {y0}",
-            path.display()
-        )));
+    if shift < -0.25 || (shift - shift.round()).abs() > 0.25 {
+        return None;
     }
-    Ok(shift.round() as usize)
+    Some(shift.round() as usize)
 }
 
 /// Run `cell` over every 12 x 12 block of a 30-arc-second raster; rows of the
@@ -125,6 +130,17 @@ pub fn block_mean(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn north_edge_must_fall_on_a_whole_pixel() {
+        let px = 0.1 / 12.0;
+        assert_eq!(north_shift(90.0, px), Some(0));
+        // CHELSA: 83.99986 N is 720 pixels below 90 N (0.017 px off).
+        assert_eq!(north_shift(83.999_860_415_15, px), Some(720));
+        assert_eq!(north_shift(84.0 - px * 0.4, px), None);
+        assert_eq!(north_shift(84.0 - px * 0.5, px), None);
+        assert_eq!(north_shift(90.0 + px, px), None);
+    }
     use wbgeotiff::{Compression, GeoTiffWriter, GeoTransform, WriteLayout};
 
     /// A global 30-arc-second raster from 84 N down to 83.8 N (CHELSA-like
