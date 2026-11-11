@@ -178,9 +178,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             for p in &problems {
                 eprintln!("{p}");
             }
+            let m = g.manifest();
+            let layer_tiles: usize = m.layers.iter().map(|l| l.tiles.len()).sum();
             eprintln!(
-                "{} tiles, {} problems",
-                g.manifest().tiles.len(),
+                "{} climate tiles, {layer_tiles} site-layer tiles, {} problems",
+                m.tiles.len(),
                 problems.len()
             );
             Ok(if problems.is_empty() {

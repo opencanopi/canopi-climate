@@ -281,16 +281,38 @@ fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
 }
 
 /// Land mask from the release's regions layer.
-fn land_mask(out: &Path) -> Result<Vec<bool>> {
-    let mut land = vec![false; LAYER_GRID_W * LAYER_GRID_H];
+/// Land mask and country code (`NODATA` where none) from the release's
+/// regions layer.
+fn land_mask(out: &Path) -> Result<(Vec<bool>, Vec<i16>)> {
+    let n = LAYER_GRID_W * LAYER_GRID_H;
+    let (mut land, mut country) = (vec![false; n], vec![NODATA; n]);
     for t in layers::read_layer(out, super::regions::DIR, REGION_BANDS)? {
         for j in 0..crate::layer::LAYER_TILE_LEN {
-            if (0..REGION_BANDS).any(|b| t.get(j, b) != NODATA) {
-                land[LayerCell::in_tile(t.id(), j).global_index()] = true;
-            }
+            let g = LayerCell::in_tile(t.id(), j).global_index();
+            land[g] = (0..REGION_BANDS).any(|b| t.get(j, b) != NODATA);
+            country[g] = t.get(j, crate::regions::RegionBand::IsoA2 as usize);
         }
     }
-    Ok(land)
+    Ok((land, country))
+}
+
+/// Land cells without soil per country, largest first (top 12).
+fn without_soil_by_country(distance: &[i16], land: &[bool], country: &[i16]) -> Value {
+    let mut by: std::collections::BTreeMap<i16, u64> = std::collections::BTreeMap::new();
+    for i in (0..distance.len()).filter(|&i| land[i] && distance[i] == NODATA) {
+        *by.entry(country[i]).or_default() += 1;
+    }
+    let mut v: Vec<(i16, u64)> = by.into_iter().collect();
+    v.sort_by_key(|&(c, n)| (std::cmp::Reverse(n), c));
+    let rows: serde_json::Map<String, Value> = v
+        .into_iter()
+        .take(12)
+        .map(|(c, n)| {
+            let name = crate::regions::decode_code(c, 2).unwrap_or_else(|| "none".into());
+            (name, json!(n))
+        })
+        .collect();
+    Value::Object(rows)
 }
 
 /// Counts for the report.
@@ -326,7 +348,7 @@ pub fn stage_soil(cfg: &BuildConfig) -> Result<()> {
         return Ok(());
     }
     let t0 = std::time::Instant::now();
-    let land = land_mask(&cfg.out)?;
+    let (land, country) = land_mask(&cfg.out)?;
     let mut combined = Vec::new();
     for v in VARIABLES {
         let read = |d: &str| {
@@ -346,7 +368,10 @@ pub fn stage_soil(cfg: &BuildConfig) -> Result<()> {
     let Measured { mut bands } = sample(&map, &vars);
     drop(vars);
     let distance = fill(&mut bands, &land, SOIL_FILL_RADIUS);
-    let report_counts = counts(&distance, &land);
+    let mut report_counts = counts(&distance, &land);
+    report_counts["land_cells_without_soil_by_country"] =
+        without_soil_by_country(&distance, &land, &country);
+    drop(country);
     eprintln!("soil: {report_counts}, {:.1} s", t0.elapsed().as_secs_f64());
     let has = |t: &LayerTile, i: usize| has_soil(t, i);
     let [ph, sand, clay] = &bands;
