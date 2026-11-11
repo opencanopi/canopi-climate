@@ -13,7 +13,7 @@ scenarios (SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP5-8.5):
 | `tmax_warm` | °C | mean daily maximum of the warmest month |
 | `tmean_cold`, `tmean_warm` | °C | mean of the coldest and warmest months |
 | `precip` | mm/year | annual precipitation |
-| `aridity` | ratio | annual precipitation / Thornthwaite potential evapotranspiration (capped at 300, where PET is near zero) |
+| `aridity` | ratio | annual precipitation / Thornthwaite potential evapotranspiration (capped at 300; no data where PET is below 1 mm/year, e.g. ice sheets) |
 | `dry_months` | months | months with precipitation (mm) below twice the temperature (°C) (Gaussen) |
 
 No hardiness zone is derived: `tmin_cold` is a monthly mean, not the annual
@@ -48,7 +48,8 @@ if let Some(found) = lookup(&tile, lat, lon)? {
 }
 ```
 
-`lookup` uses the point's cell when it has every value, else the nearest
+`lookup` uses the point's cell when it has every value (aridity may be
+missing, see above), else the nearest
 complete cell within 2 cells inside the same tile. It returns `None` at sea or
 when no cell nearby has data. A missing tile file means the tile has no land.
 

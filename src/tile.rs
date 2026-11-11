@@ -11,7 +11,7 @@ use tiff::decoder::{Decoder, DecodingResult};
 use tiff::tags::Tag;
 
 use crate::grid::{CELL_DEG, TILE_CELLS, TILE_LEN, TileId};
-use crate::model::{BANDS, NODATA};
+use crate::model::{BANDS, NODATA, SLOTS, Variable};
 
 /// Why a tile could not be decoded.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -87,7 +87,11 @@ impl Tile {
     #[must_use]
     pub fn is_complete(&self, index: usize) -> bool {
         let p = self.pixel(index);
-        !p.is_empty() && p.iter().all(|&v| v != NODATA)
+        let aridity = Variable::Aridity.index();
+        !p.is_empty()
+            && p.iter()
+                .enumerate()
+                .all(|(b, &v)| v != NODATA || b / SLOTS.len() == aridity)
     }
 
     /// Number of complete cells.

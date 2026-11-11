@@ -28,15 +28,21 @@ pub enum Variable {
     /// Annual precipitation (mm).
     Precip,
     /// Aridity index: annual precipitation / Thornthwaite potential
-    /// evapotranspiration (dimensionless, capped at [`ARIDITY_CAP`]).
+    /// evapotranspiration (dimensionless, capped at [`ARIDITY_CAP`];
+    /// [`NODATA`] where PET is below [`ARIDITY_MIN_PET_MM`]).
     Aridity,
     /// Months with precipitation (mm) below twice the mean temperature (°C)
     /// (Gaussen), 0-12.
     DryMonths,
 }
 
-/// Largest stored aridity index (very wet or very cold cells).
+/// Largest stored aridity index (very wet cells).
 pub const ARIDITY_CAP: f32 = 300.0;
+
+/// Below this annual Thornthwaite PET (mm) the aridity index is not
+/// defined and is stored as [`NODATA`]: a near-zero PET (ice sheets, high
+/// Arctic) would make any precipitation read as "very wet".
+pub const ARIDITY_MIN_PET_MM: f64 = 1.0;
 
 /// Variables in band order.
 pub const VARIABLES: [Variable; 8] = [
@@ -117,7 +123,7 @@ impl Variable {
                 unit: "1",
                 scale: 0.01,
                 offset: 0.0,
-                description: "Aridity index: annual precipitation divided by Thornthwaite potential evapotranspiration from the monthly means, capped at 300.",
+                description: "Aridity index: annual precipitation divided by Thornthwaite potential evapotranspiration from the monthly means, capped at 300; no data where PET is below 1 mm/year (ice sheets, high Arctic), where the ratio is meaningless.",
             },
             Self::DryMonths => VariableInfo {
                 id: "dry_months",

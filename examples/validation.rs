@@ -171,7 +171,7 @@ pub struct Era5 {
     tmean_cold: f64,
     tmean_warm: f64,
     precip: f64,
-    aridity: f64,
+    aridity: Option<f64>,
     dry_months: u8,
     koppen: String,
 }
@@ -209,7 +209,7 @@ fn era5_of(city: &Value) -> Res<Era5> {
         tmean_cold: f64::from(s.tmean_cold),
         tmean_warm: f64::from(s.tmean_warm),
         precip: f64::from(s.precip),
-        aridity: f64::from(s.aridity),
+        aridity: s.aridity.map(f64::from),
         dry_months: s.dry_months,
         koppen: s
             .koppen_of_means
@@ -272,7 +272,7 @@ fn table(
             misses.push("precip".to_string());
         }
         println!(
-            "| {name} | {} / {} | {} | {} | {} | {} | {:.0} / {:.0} ({:+.0}%){} | {:.2} / {:.2} | {} / {} | {} |",
+            "| {name} | {} / {} | {} | {} | {} | {} | {:.0} / {:.0} ({:+.0}%){} | {} / {} | {} / {} | {} |",
             g.koppen,
             e.koppen,
             cols[0],
@@ -283,8 +283,9 @@ fn table(
             e.precip,
             100.0 * rel,
             if pmiss { " **miss**" } else { "" },
-            g.aridity_index,
-            e.aridity,
+            g.aridity_index
+                .map_or_else(|| "-".into(), |a| format!("{a:.2}")),
+            e.aridity.map_or_else(|| "-".into(), |a| format!("{a:.2}")),
             g.dry_months,
             e.dry_months,
             if misses.is_empty() {
@@ -298,7 +299,7 @@ fn table(
             "era5": {
                 "koppen": e.koppen, "tmin_cold_c": r2(e.tmin_cold), "tmax_warm_c": r2(e.tmax_warm),
                 "tmean_cold_c": r2(e.tmean_cold), "tmean_warm_c": r2(e.tmean_warm),
-                "precip_mm": r2(e.precip), "aridity_index": r2(e.aridity), "dry_months": e.dry_months,
+                "precip_mm": r2(e.precip), "aridity_index": e.aridity.map(r2), "dry_months": e.dry_months,
             },
             "misses": misses,
             "lookup": serde_json::to_value(&found)?,

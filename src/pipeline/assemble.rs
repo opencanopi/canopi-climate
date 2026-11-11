@@ -140,6 +140,7 @@ struct SlotStats {
     group_of_means_same: u64,
     tmin_clamped: u64,
     tmax_clamped: u64,
+    aridity_undefined: u64,
     tmin_clamped_outside_e: u64,
     tmax_clamped_outside_e: u64,
     class_missing: u64,
@@ -156,6 +157,7 @@ impl SlotStats {
         };
         if let (Some(tc), Some(tw)) = (d(Variable::TmeanCold), d(Variable::TmeanWarm)) {
             self.with_class_and_temps += 1;
+            self.aridity_undefined += u64::from(v[Variable::Aridity.index()] == NODATA);
             let m = koppen::temperature_margin(code, tc, tw);
             self.margin_gt0 += u64::from(m > 0.0);
             self.margin_gt1 += u64::from(m > 1.0);
@@ -198,6 +200,7 @@ impl SlotStats {
                 "percent_same_class": pct(self.class_of_means_same, self.class_of_means_compared),
                 "percent_same_group": pct(self.group_of_means_same, self.class_of_means_compared),
             },
+            "aridity_undefined_pet_below_1mm": self.aridity_undefined,
             "extremes_clamped_to_monthly_means": {
                 "tmin_cold": self.tmin_clamped,
                 "tmax_warm": self.tmax_clamped,
@@ -256,6 +259,7 @@ fn fill_slot(
         total.class_of_means_compared += p.class_of_means_compared;
         total.class_of_means_same += p.class_of_means_same;
         total.group_of_means_same += p.group_of_means_same;
+        total.aridity_undefined += p.aridity_undefined;
         total.tmin_clamped += p.tmin_clamped;
         total.tmax_clamped += p.tmax_clamped;
         total.tmin_clamped_outside_e += p.tmin_clamped_outside_e;
@@ -533,11 +537,12 @@ fn notes() -> Vec<String> {
         "Future values: tmin_cold and tmax_warm add the change in Beck et al. (2023)'s coldest/warmest monthly mean (ensemble mean of constrained CMIP6 models) to the 1991-2020 baseline (delta method); the other variables are computed from Beck's projected monthly means directly.",
         "Baseline: CHELSA bio5/bio6 cover 1981-2010; they are moved to 1991-2020 by one third of the change of Beck's coldest/warmest monthly mean between 1961-1990 and 1991-2020 (linear trend over the 10-year offset).",
         "Köppen classes come from Beck's 1-km maps (most frequent class in the cell), temperatures from Beck's 0.1-degree monthly means: in some cells the two disagree. Lookups report koppen_temperature_margin_c; build-report.json counts the cells.",
+        "Aridity has no data where Thornthwaite PET is below 1 mm/year (every month at or below 0 °C, mostly ice sheets and the high Arctic): a ratio over a near-zero PET would read as very wet. Such cells stay complete; lookups return aridity_index null. build-report.json counts them.",
         "Aridity uses Thornthwaite PET, which runs low in hot dry climates compared with Penman-Monteith: compare aridity between places, not with thresholds computed from other PET formulas.",
         "Precipitation products disagree by tens of percent at a point (build-report.json compares Beck with CHELSA): treat precipitation and aridity as estimates.",
         "tmin_cold never exceeds tmean_cold and tmax_warm is never below tmean_warm: where CHELSA and Beck disagree that much (mostly on the ice sheets) the extreme is set to the monthly mean; build-report.json counts the cells.",
         "tmin_cold is the mean daily minimum of the coldest month, not the annual extreme minimum: no USDA hardiness zone is derived.",
-        "Lookups use the point's cell when it has every value, else the nearest complete cell within 2 cells inside the same tile, else nothing.",
+        "Lookups use the point's cell when it has every value (aridity may be missing), else the nearest complete cell within 2 cells inside the same tile, else nothing.",
         "GeoTIFF tags carry no band names or scale/offset (wbgeotiff writes no GDAL metadata): use this manifest to read bands in GIS software.",
     ]
     .iter()

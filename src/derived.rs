@@ -3,7 +3,7 @@
 //! annual extreme minimum.
 
 use crate::koppen;
-use crate::model::ARIDITY_CAP;
+use crate::model::{ARIDITY_CAP, ARIDITY_MIN_PET_MM};
 
 /// Mid-month day of year, January first.
 const MID_MONTH_DOY: [f64; 12] = [
@@ -64,9 +64,9 @@ pub struct MonthlySummary {
     pub tmean_warm: f32,
     /// Annual precipitation (mm).
     pub precip: f32,
-    /// Precipitation / Thornthwaite PET, capped at [`ARIDITY_CAP`]
-    /// (the cap also applies where PET is 0).
-    pub aridity: f32,
+    /// Precipitation / Thornthwaite PET, capped at [`ARIDITY_CAP`]; `None`
+    /// where PET is below [`ARIDITY_MIN_PET_MM`].
+    pub aridity: Option<f32>,
     /// Months with P (mm) < 2 T (°C).
     pub dry_months: u8,
     /// Köppen-Geiger class of the monthly means themselves.
@@ -83,11 +83,8 @@ impl MonthlySummary {
         }
         let precip: f32 = p.iter().sum();
         let pet = thornthwaite_pet(t, lat_deg);
-        let aridity = if pet > 0.0 {
-            (f64::from(precip) / pet).min(f64::from(ARIDITY_CAP)) as f32
-        } else {
-            ARIDITY_CAP
-        };
+        let aridity = (pet >= ARIDITY_MIN_PET_MM)
+            .then(|| (f64::from(precip) / pet).min(f64::from(ARIDITY_CAP)) as f32);
         let dry = (0..12).filter(|&m| p[m] < 2.0 * t[m]).count();
         Some(Self {
             tmean_cold: t.iter().copied().fold(f32::INFINITY, f32::min),
@@ -137,14 +134,28 @@ mod tests {
         assert!((s.precip - 520.0).abs() < 1e-3);
         // May, Jun, Jul, Aug, Sep are dry by Gaussen's rule.
         assert_eq!(s.dry_months, 5);
-        assert!(s.aridity > 0.3 && s.aridity < 0.8, "{}", s.aridity);
+        let a = s.aridity.unwrap();
+        assert!(a > 0.3 && a < 0.8, "{a}");
         assert_eq!(s.koppen_of_means.map(koppen::symbol), Some("Csa"));
     }
 
     #[test]
     fn frozen_and_invalid_cells() {
         let s = MonthlySummary::new(&[-20.0; 12], &[10.0; 12], 75.0).unwrap();
-        assert_eq!(s.aridity, ARIDITY_CAP);
+        assert_eq!(s.aridity, None);
+        // McMurdo-like, 197 mm a year: the one month above 0 °C falls in
+        // the polar night, so PET is 0: no aridity rather than "very wet".
+        let mut t = [-20.0; 12];
+        t[5] = 0.3;
+        let s = MonthlySummary::new(&t, &[197.0 / 12.0; 12], -77.8).unwrap();
+        assert!(thornthwaite_pet(&t, -77.8) < ARIDITY_MIN_PET_MM);
+        assert_eq!(s.aridity, None);
+        // A very wet cell with real PET is capped, not dropped.
+        let mut t = [-5.0; 12];
+        t[6] = 0.5;
+        let s = MonthlySummary::new(&t, &[30000.0; 12], 60.0).unwrap();
+        assert!(thornthwaite_pet(&t, 60.0) >= ARIDITY_MIN_PET_MM);
+        assert_eq!(s.aridity, Some(ARIDITY_CAP));
         assert_eq!(s.dry_months, 0);
         let mut t = [10.0; 12];
         t[0] = f32::NAN;

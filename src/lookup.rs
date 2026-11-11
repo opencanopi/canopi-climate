@@ -43,7 +43,7 @@ pub struct PeriodClimate {
     /// Annual precipitation (mm).
     pub precip_mm: f64,
     /// Precipitation / potential evapotranspiration.
-    pub aridity_index: f64,
+    pub aridity_index: Option<f64>,
     /// Dry months (Gaussen), 0-12.
     pub dry_months: u8,
 }
@@ -186,7 +186,8 @@ fn period(tile: &Tile, index: usize, slot: usize) -> PeriodClimate {
         tmean_cold_c: tmean_cold,
         tmean_warm_c: tmean_warm,
         precip_mm: v(Variable::Precip),
-        aridity_index: v(Variable::Aridity),
+        aridity_index: Variable::Aridity
+            .decode(tile.get(index, band(Variable::Aridity.index(), slot))),
         dry_months,
     }
 }
@@ -206,6 +207,28 @@ mod tests {
     fn at(t: &Tile, x: usize, y: usize) -> (f64, f64) {
         let c = t.id().cell(y * TILE_CELLS + x);
         (c.center_lat(), c.center_lon())
+    }
+
+    #[test]
+    fn missing_aridity_keeps_the_cell_and_reads_null() {
+        let t = n50e000();
+        let j = 40 * TILE_CELLS + 50;
+        let mut data = t.data().to_vec();
+        for s in 0..SLOTS.len() {
+            data[j * BANDS + band(Variable::Aridity.index(), s)] = NODATA;
+        }
+        let t = Tile::new(t.id(), data).unwrap();
+        assert!(t.is_complete(j));
+        let (lat, lon) = at(&t, 50, 40);
+        let r = lookup(&t, lat, lon).unwrap().unwrap();
+        assert_eq!(r.distance_cells, 0.0);
+        assert!(r.periods.iter().all(|p| p.aridity_index.is_none()));
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v["periods"][0]["aridity_index"].is_null());
+        // Any other missing value still makes the cell incomplete.
+        let mut data = t.data().to_vec();
+        data[j * BANDS + band(Variable::Precip.index(), 0)] = NODATA;
+        assert!(!Tile::new(t.id(), data).unwrap().is_complete(j));
     }
 
     #[test]

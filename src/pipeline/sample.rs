@@ -260,7 +260,8 @@ fn write_rows<W: Write>(
             format!("{:.1}", p.tmean_cold_c),
             format!("{:.1}", p.tmean_warm_c),
             format!("{:.0}", p.precip_mm),
-            format!("{:.2}", p.aridity_index),
+            p.aridity_index
+                .map_or_else(String::new, |a| format!("{a:.2}")),
             p.dry_months.to_string(),
             f.tile.clone(),
         ];

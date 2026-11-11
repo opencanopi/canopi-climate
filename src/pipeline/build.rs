@@ -401,7 +401,7 @@ fn beck_summaries(nc: &Path) -> Result<Vec<Vec<f32>>> {
             layers[beck_band::TCOLD][i] = s.tmean_cold;
             layers[beck_band::TWARM][i] = s.tmean_warm;
             layers[beck_band::PRECIP][i] = s.precip;
-            layers[beck_band::ARIDITY][i] = s.aridity;
+            layers[beck_band::ARIDITY][i] = s.aridity.unwrap_or(f32::NAN);
             layers[beck_band::DRY][i] = f32::from(s.dry_months);
             layers[beck_band::KOPPEN_OF_MEANS][i] = s.koppen_of_means.map_or(f32::NAN, f32::from);
         }
