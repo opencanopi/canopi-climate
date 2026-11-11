@@ -542,7 +542,7 @@ fn notes() -> Vec<String> {
         "Precipitation products disagree by tens of percent at a point (build-report.json compares Beck with CHELSA): treat precipitation and aridity as estimates.",
         "tmin_cold never exceeds tmean_cold and tmax_warm is never below tmean_warm: where CHELSA and Beck disagree that much (mostly on the ice sheets) the extreme is set to the monthly mean; build-report.json counts the cells.",
         "tmin_cold is the mean daily minimum of the coldest month, not the annual extreme minimum: no USDA hardiness zone is derived.",
-        "Lookups use the point's cell when it has every value (aridity may be missing), else the nearest complete cell within 2 cells inside the same tile, else nothing.",
+        "Lookups use the point's cell when it has every value (aridity may be missing), else the nearest complete cell within 2 cells, else nothing. The native reader (CLI, sample) searches neighbouring tiles too; the WebAssembly lookup, given one tile, stays inside it.",
         "GeoTIFF tags carry no band names or scale/offset (wbgeotiff writes no GDAL metadata): use this manifest to read bands in GIS software.",
     ]
     .iter()

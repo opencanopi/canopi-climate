@@ -50,7 +50,8 @@ if let Some(found) = lookup(&tile, lat, lon)? {
 
 `lookup` uses the point's cell when it has every value (aridity may be
 missing, see above), else the nearest
-complete cell within 2 cells inside the same tile. It returns `None` at sea or
+complete cell within 2 cells inside the same tile (the CLI and `sample`
+also search the neighbouring tiles). It returns `None` at sea or
 when no cell nearby has data. A missing tile file means the tile has no land.
 
 ### JavaScript (WebAssembly)

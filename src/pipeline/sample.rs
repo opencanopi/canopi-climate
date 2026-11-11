@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::{PipelineError, Result, sha256_file};
 use crate::grid::TileId;
-use crate::lookup::{Lookup, lookup_within};
+use crate::lookup::{Lookup, lookup_across, search_tiles};
 use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
 use crate::tile::Tile;
 
@@ -58,14 +58,13 @@ impl Grid {
         &self.manifest
     }
 
-    fn tile(&mut self, id: TileId) -> Result<Option<&Tile>> {
+    /// Decode a tile into the cache (no-op for cached tiles and for tiles
+    /// without land, which have no file).
+    fn load(&mut self, id: TileId) -> Result<()> {
         let Some(rel) = self.paths.get(&id.name()) else {
-            return Ok(None); // no land in this tile
+            return Ok(());
         };
         if !self.cache.contains_key(&id) {
-            if self.cache.len() >= CACHE_TILES {
-                self.cache.clear();
-            }
             let path = self.dir.join(rel);
             let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
             let tile = Tile::decode(&bytes)?;
@@ -78,20 +77,26 @@ impl Grid {
             }
             self.cache.insert(id, tile);
         }
-        Ok(self.cache.get(&id))
+        Ok(())
     }
 
-    /// Look a point up. `Ok(None)`: no complete cell within `radius`.
+    /// Look a point up. `Ok(None)`: no complete cell within `radius`. The
+    /// search crosses tile edges (and the antimeridian), unlike the
+    /// single-tile [`crate::lookup::lookup`] used in WebAssembly.
     ///
     /// # Errors
     /// Invalid coordinate, unreadable tile.
     pub fn lookup(&mut self, lat: f64, lon: f64, radius: usize) -> Result<Option<Lookup>> {
-        let id = TileId::of(lat, lon)
-            .ok_or_else(|| PipelineError::Data(format!("invalid coordinate {lat}, {lon}")))?;
-        let Some(tile) = self.tile(id)? else {
-            return Ok(None);
-        };
-        lookup_within(tile, lat, lon, radius).map_err(|e| PipelineError::Data(e.to_string()))
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.cache.len() + ids.len() > CACHE_TILES {
+            self.cache.clear();
+        }
+        for id in &ids {
+            self.load(*id)?;
+        }
+        let cache = &self.cache;
+        lookup_across(|id| cache.get(&id), lat, lon, radius).map_err(bad)
     }
 
     /// Check every tile against the manifest (size and SHA-256); returns
@@ -312,6 +317,10 @@ mod tests {
         assert_eq!(r.periods.len(), 9);
         // A tile absent from the manifest is all ocean.
         assert_eq!(g.lookup(-30.0, -140.0, 2).unwrap(), None);
+        // 50.05 N, 0.05 E lies in n60e000 (no file), one cell north of
+        // n50e000's land corner: the search crosses the tile edge.
+        let r = g.lookup(50.05, 0.05, 2).unwrap().unwrap();
+        assert_eq!((r.tile.as_str(), r.distance_cells), ("n50e000", 1.0));
         assert!(g.lookup(95.0, 0.0, 2).is_err());
     }
 

@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 
-use crate::grid::{Cell, TILE_CELLS, TileId};
+use crate::grid::{Cell, GRID_H, GRID_W, TILE_CELLS, TileId};
 use crate::koppen;
 use crate::model::{SLOTS, VARIABLES, Variable, band};
 use crate::tile::Tile;
@@ -113,9 +113,13 @@ pub fn lookup_within(
     let Some((found, d2)) = nearest_complete(tile, cell, radius) else {
         return Ok(None);
     };
+    Ok(Some(build(tile, found, d2, lat, lon)))
+}
+
+fn build(tile: &Tile, found: Cell, d2: u32, lat: f64, lon: f64) -> Lookup {
     let index = found.index_in_tile();
     let periods = (0..SLOTS.len()).map(|s| period(tile, index, s)).collect();
-    Ok(Some(Lookup {
+    Lookup {
         lat,
         lon,
         cell_lat: round6(found.center_lat()),
@@ -123,7 +127,71 @@ pub fn lookup_within(
         distance_cells: f64::from(d2).sqrt(),
         tile: tile.id().name(),
         periods,
-    }))
+    }
+}
+
+/// Cells within `radius` of a point's cell, in search order (north to
+/// south, then west to east) with their squared distance. Longitude wraps
+/// at the antimeridian; latitude stops at the poles.
+fn window(cell: Cell, radius: usize) -> impl Iterator<Item = (Cell, u32)> {
+    let r = i64::try_from(radius.min(TILE_CELLS)).unwrap_or(0);
+    let (row0, col0) = (cell.row as i64, cell.col as i64);
+    (-r..=r).flat_map(move |dy| {
+        (-r..=r).filter_map(move |dx| {
+            let d2 = dx * dx + dy * dy;
+            let row = row0 + dy;
+            if d2 > r * r || row < 0 || row >= GRID_H as i64 {
+                return None;
+            }
+            let col = (col0 + dx).rem_euclid(GRID_W as i64);
+            let c = Cell {
+                col: usize::try_from(col).ok()?,
+                row: usize::try_from(row).ok()?,
+            };
+            Some((c, u32::try_from(d2).ok()?))
+        })
+    })
+}
+
+/// Tiles that a search of `radius` cells around a point can reach (load
+/// them before [`lookup_across`]).
+///
+/// # Errors
+/// [`LookupError::InvalidCoordinate`].
+pub fn search_tiles(lat: f64, lon: f64, radius: usize) -> Result<Vec<TileId>, LookupError> {
+    let cell = Cell::of(lat, lon).ok_or(LookupError::InvalidCoordinate)?;
+    let mut ids: Vec<TileId> = window(cell, radius).map(|(c, _)| c.tile()).collect();
+    ids.sort_by_key(|t| (t.row, t.col));
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Like [`lookup_within`], but the search continues into neighbouring
+/// tiles (across the antimeridian, not across the poles). `tiles` returns
+/// the decoded tile, or `None` for a tile without land. Ties go to the
+/// northern, then western cell.
+///
+/// # Errors
+/// [`LookupError::InvalidCoordinate`].
+pub fn lookup_across<'a>(
+    tiles: impl Fn(TileId) -> Option<&'a Tile>,
+    lat: f64,
+    lon: f64,
+    radius: usize,
+) -> Result<Option<Lookup>, LookupError> {
+    let cell = Cell::of(lat, lon).ok_or(LookupError::InvalidCoordinate)?;
+    let mut best: Option<(u32, Cell, &Tile)> = None;
+    for (c, d2) in window(cell, radius) {
+        if best.is_some_and(|(b, _, _)| b <= d2) {
+            continue;
+        }
+        if let Some(t) = tiles(c.tile())
+            && t.is_complete(c.index_in_tile())
+        {
+            best = Some((d2, c, t));
+        }
+    }
+    Ok(best.map(|(d2, c, t)| build(t, c, d2, lat, lon)))
 }
 
 fn round1(x: f64) -> f64 {
@@ -207,6 +275,61 @@ mod tests {
     fn at(t: &Tile, x: usize, y: usize) -> (f64, f64) {
         let c = t.id().cell(y * TILE_CELLS + x);
         (c.center_lat(), c.center_lon())
+    }
+
+    #[test]
+    fn search_continues_into_neighbouring_tiles() {
+        let t = n50e000();
+        let get = |id: TileId| (id == t.id()).then_some(&t);
+        // Cell (0, 99) of n60e000, just north of n50e000's land corner (0, 0).
+        let north = TileId::parse("n60e000").unwrap().cell(99 * TILE_CELLS);
+        let (lat, lon) = (north.center_lat(), north.center_lon());
+        assert_eq!(
+            lookup_across(get, lat, lon, 2)
+                .unwrap()
+                .map(|r| r.distance_cells),
+            Some(1.0)
+        );
+        let r = lookup_across(get, lat, lon, 2).unwrap().unwrap();
+        assert_eq!(
+            (r.tile.as_str(), r.cell_lat, r.cell_lon),
+            ("n50e000", 49.95, 0.05)
+        );
+        assert_eq!(search_tiles(lat, lon, 2).unwrap().len(), 4);
+        // Inside one tile, the same answer as the single-tile search.
+        for (x, y) in [(50, 40), (18, 50), (3, 3), (99, 99)] {
+            let (lat, lon) = at(&t, x, y);
+            assert_eq!(
+                lookup_across(get, lat, lon, 2).unwrap(),
+                lookup(&t, lat, lon).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn search_wraps_at_the_antimeridian_and_stops_at_the_poles() {
+        let east = synthetic::tile(TileId::parse("n90e170").unwrap());
+        let get = |id: TileId| (id == east.id()).then_some(&east);
+        // Cell (0, 0) of n90w180: its western neighbour is n90e170's corner (99, 0).
+        let west = TileId::parse("n90w180").unwrap().cell(0);
+        let r = lookup_across(get, west.center_lat(), west.center_lon(), 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (r.tile.as_str(), r.distance_cells, r.cell_lon),
+            ("n90e170", 1.0, 179.95)
+        );
+        // At the North Pole row, rows above do not exist: no panic, no wrap.
+        assert!(
+            search_tiles(90.0, 0.0, 2)
+                .unwrap()
+                .iter()
+                .all(|t| t.name().starts_with('n'))
+        );
+        assert!(matches!(
+            lookup_across(get, 91.0, 0.0, 2),
+            Err(LookupError::InvalidCoordinate)
+        ));
     }
 
     #[test]
