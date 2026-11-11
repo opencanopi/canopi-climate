@@ -10,6 +10,7 @@ pub mod aggregate;
 pub mod assemble;
 pub mod build;
 pub mod cog;
+pub mod igh;
 pub mod netcdf;
 pub mod raster;
 pub mod sample;
