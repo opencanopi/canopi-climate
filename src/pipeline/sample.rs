@@ -8,7 +8,7 @@ use super::{PipelineError, Result, sha256_file};
 use crate::grid::TileId;
 use crate::layer::LayerTile;
 use crate::lookup::{Lookup, lookup_across, search_tiles};
-use crate::manifest::{FORMAT, FORMAT_VERSION, MIN_FORMAT_VERSION, Manifest};
+use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
@@ -41,11 +41,9 @@ impl Grid {
         let text = std::fs::read_to_string(&path).map_err(|e| PipelineError::io(&path, e))?;
         let manifest: Manifest = serde_json::from_str(&text)
             .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?;
-        if manifest.format != FORMAT
-            || !(MIN_FORMAT_VERSION..=FORMAT_VERSION).contains(&manifest.format_version)
-        {
+        if manifest.format != FORMAT || manifest.format_version != FORMAT_VERSION {
             return Err(PipelineError::Data(format!(
-                "{}: format {} v{}, this build reads {FORMAT} v{MIN_FORMAT_VERSION}-{FORMAT_VERSION}",
+                "{}: format {} v{}, this build reads {FORMAT} v{FORMAT_VERSION}",
                 path.display(),
                 manifest.format,
                 manifest.format_version

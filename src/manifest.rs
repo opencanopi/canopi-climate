@@ -4,11 +4,10 @@ use serde::{Deserialize, Serialize};
 
 /// Format identifier written in every manifest.
 pub const FORMAT: &str = "canopi-climate-grid";
-/// Current manifest/tile format version. Version 2 adds [`Manifest::layers`]
-/// (soil, regions); readers accept [`MIN_FORMAT_VERSION`] and later.
-pub const FORMAT_VERSION: u32 = 2;
-/// Oldest manifest version this build reads (version 1: climate only).
-pub const MIN_FORMAT_VERSION: u32 = 1;
+/// Manifest/tile format version. Fields added without changing the
+/// meaning of existing ones keep the version, so older readers still work
+/// (they ignore unknown fields): [`Manifest::layers`] (0.2.0) is optional.
+pub const FORMAT_VERSION: u32 = 1;
 
 /// The manifest of a grid release.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,7 +34,7 @@ pub struct Manifest {
     pub tiles: Vec<TileSpec>,
     /// Notes on methods and known limits.
     pub notes: Vec<String>,
-    /// Site layers on the finer layer grid (absent in version 1).
+    /// Site layers on the finer layer grid (absent before 0.2.0; optional).
     #[serde(default)]
     pub layers: Vec<LayerSpec>,
 }

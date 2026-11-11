@@ -23,8 +23,10 @@ as the climate tiles?
    pixel-interleaved, Deflate, nodata -32768, EPSG:4326, one internal tile
    of 208, no overviews; written by `wbgeotiff`, read by the `tiff` crate.
    One file per layer and tile, under `soil/` and `regions/`. Tiles without
-   data are absent. `manifest.json` (format 2) lists each layer under
-   `layers` with its bands, sources and tiles (size, SHA-256).
+   data are absent. `manifest.json` lists each layer under `layers` with
+   its bands, sources and tiles (size, SHA-256). `layers` is an optional
+   field added without changing the format version (still 1), so 0.1.0
+   readers still read the release (`tests/manifest_compat.rs`).
 3. **Separate soil and regions files**, not one 6-band file: the regions
    tiles are tiny (median 1.4 KB) and exist where soil does not (Greenland,
    Antarctica, ice and sand). Each layer can be rebuilt alone.
