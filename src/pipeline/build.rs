@@ -245,10 +245,10 @@ fn stage_chelsa(cfg: &BuildConfig) -> Result<()> {
     ];
     vars.par_iter()
         .filter(|(v, _, _)| cfg.force || !chelsa_path(&cfg.work, v).exists())
-        .map(|(v, scale, offset)| {
+        .map(|&(v, scale, offset)| {
             let rel = format!("chelsa/CHELSA_{v}_1981-2010_V.2.1.tif");
             let src = sources::pinned(&cfg.sources, &rel)?;
-            let layer = chelsa_mean(&src, *scale, *offset)?;
+            let layer = chelsa_mean(&src, scale, offset)?;
             raster::write_f32(&chelsa_path(&cfg.work, v), &[&layer])?;
             eprintln!("chelsa {v}: done");
             Ok(())
@@ -257,11 +257,36 @@ fn stage_chelsa(cfg: &BuildConfig) -> Result<()> {
     Ok(())
 }
 
-/// Mean of a CHELSA `u16` layer per cell; the file's nodata is excluded.
+/// Mean of a CHELSA `u16` layer per cell. Excluded: the nodata value
+/// ([`u16_nodata`]) and, for temperatures in K x 10 (negative `offset`),
+/// zero.
 pub(super) fn chelsa_mean(src: &Path, scale: f64, offset: f64) -> Result<Vec<f32>> {
-    let nodata = super::tiff_rows::TiffRows::open(src)?.info.nodata;
-    block_mean(src, scale, offset, move |v| {
-        Some(f64::from(v)) != nodata && v >= 0.0
+    let info = super::tiff_rows::TiffRows::open(src)?.info;
+    let nodata = u16_nodata(info.sample_format, info.bits, info.nodata)
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", src.display())))?;
+    let min_valid = if offset < 0.0 { 1.0 } else { 0.0 };
+    block_mean(src, scale, offset, move |v| v != nodata && v >= min_valid)
+}
+
+/// The nodata value of an unsigned 16-bit source: the declared value when a
+/// sample can hold it, else 65535. CHELSA V2.1 declares -99999, which no
+/// `u16` sample can equal. Other sample types are refused.
+///
+/// # Errors
+/// A source that is not unsigned 16-bit.
+pub(super) fn u16_nodata(
+    format: wbgeotiff::SampleFormat,
+    bits: u16,
+    declared: Option<f64>,
+) -> std::result::Result<f32, String> {
+    if format != wbgeotiff::SampleFormat::Uint || bits != 16 {
+        return Err(format!(
+            "expected unsigned 16-bit samples, found {format:?} {bits}-bit"
+        ));
+    }
+    Ok(match declared {
+        Some(x) if x.fract() == 0.0 && (0.0..=65535.0).contains(&x) => x as f32,
+        _ => 65535.0,
     })
 }
 
@@ -506,6 +531,20 @@ mod tests {
             );
             assert!(sources::pinned(dir, &kg).is_ok(), "{kg}");
         }
+    }
+
+    #[test]
+    fn u16_nodata_falls_back_when_unrepresentable() {
+        use wbgeotiff::SampleFormat;
+        assert_eq!(
+            u16_nodata(SampleFormat::Uint, 16, Some(-99999.0)),
+            Ok(65535.0)
+        );
+        assert_eq!(u16_nodata(SampleFormat::Uint, 16, None), Ok(65535.0));
+        assert_eq!(u16_nodata(SampleFormat::Uint, 16, Some(0.0)), Ok(0.0));
+        assert_eq!(u16_nodata(SampleFormat::Uint, 16, Some(1.5)), Ok(65535.0));
+        assert!(u16_nodata(SampleFormat::Int, 16, Some(-99999.0)).is_err());
+        assert!(u16_nodata(SampleFormat::Uint, 8, None).is_err());
     }
 
     #[test]
