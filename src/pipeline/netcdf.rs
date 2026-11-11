@@ -18,7 +18,7 @@
 use std::path::Path;
 
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
-use wbhdf::btree::read_chunked_storage_records_bounded_in_file;
+use wbhdf::btree::{ChunkedStorageLeafRecord, read_chunked_storage_records_bounded_in_file};
 use wbhdf::filters::decompress_zlib;
 use wbhdf::object_header::{ObjectHeader, ObjectHeaderMessageHeader};
 
@@ -286,6 +286,37 @@ fn unfilter(mut raw: Vec<u8>, filters: &[u16], mask: u32, elem_size: usize) -> R
     Ok(raw)
 }
 
+/// One record per chunk. `wbhdf`'s B-tree walk (rev 9c0ff4f) returns each
+/// leaf record many times (34,119 records for 1,944 chunks in Beck's files);
+/// identical repeats are dropped, a chunk listed with two different
+/// addresses is an error.
+fn unique_chunks(
+    records: Vec<ChunkedStorageLeafRecord>,
+    nd: usize,
+) -> Result<Vec<ChunkedStorageLeafRecord>> {
+    let mut by_offset: std::collections::BTreeMap<Vec<u64>, ChunkedStorageLeafRecord> =
+        std::collections::BTreeMap::new();
+    for r in records {
+        let key = r
+            .chunk_offsets
+            .get(..nd)
+            .map(<[u64]>::to_vec)
+            .ok_or_else(|| err("chunk record rank"))?;
+        match by_offset.get(&key) {
+            Some(prev)
+                if prev.chunk_address != r.chunk_address || prev.chunk_size != r.chunk_size =>
+            {
+                return Err(err(format!("chunk {key:?} listed at two addresses")));
+            }
+            Some(_) => {}
+            None => {
+                by_offset.insert(key, r);
+            }
+        }
+    }
+    Ok(by_offset.into_values().collect())
+}
+
 /// Read a whole `f32` variable, row-major in `dims` order; cells never
 /// written hold the fill value (or NaN).
 ///
@@ -311,6 +342,7 @@ pub fn read_var_f32(path: &Path, v: &NcVar) -> Result<Vec<f32>> {
         10_000_000,
     )
     .map_err(|e| err(e.to_string()))?;
+    let records = unique_chunks(records, nd)?;
     let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
     let dims: Vec<usize> = v
         .dims
@@ -396,6 +428,27 @@ fn place_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rec(off: &[u64], addr: u64) -> ChunkedStorageLeafRecord {
+        ChunkedStorageLeafRecord {
+            chunk_size: 100,
+            chunk_offsets: off.iter().copied().chain([0]).collect(),
+            chunk_address: addr,
+        }
+    }
+
+    #[test]
+    fn repeated_chunk_records_are_dropped() {
+        let recs = vec![
+            rec(&[0, 0], 10),
+            rec(&[0, 200], 20),
+            rec(&[0, 0], 10),
+            rec(&[0, 200], 20),
+        ];
+        let u = unique_chunks(recs, 2).unwrap();
+        assert_eq!(u.len(), 2);
+        assert!(unique_chunks(vec![rec(&[0, 0], 10), rec(&[0, 0], 11)], 2).is_err());
+    }
 
     #[test]
     fn unshuffle_restores_element_bytes() {
