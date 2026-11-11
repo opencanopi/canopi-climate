@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use canopi_climate::layer::LAYER_LOOKUP_RADIUS;
 use canopi_climate::lookup::DEFAULT_RADIUS;
 use canopi_climate::pipeline::build::{self, BuildConfig, Stage};
 use canopi_climate::pipeline::sample::{Grid, sample_csv};
@@ -36,7 +37,8 @@ enum Command {
         /// Work directory for intermediates (default: `<out>/../work-<out name>`).
         #[arg(long)]
         work: Option<PathBuf>,
-        /// Stages to run (repeatable); default: verify, koppen, chelsa, beck, tiles.
+        /// Stages to run (repeatable); default: verify, koppen, chelsa, beck,
+        /// tiles, regions, soil.
         #[arg(long = "stage", value_enum)]
         stages: Vec<Stage>,
         /// Only these Beck periods in the `beck` stage (e.g. 1991_2020, 2041_2070_ssp245).
@@ -71,7 +73,8 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_RADIUS)]
         radius: usize,
     },
-    /// Look one point up and print JSON.
+    /// Look one point up and print JSON: `climate`, `soil` and `regions`
+    /// (each `null` when absent; exit code 2 when all are).
     Lookup {
         /// Latitude (degrees north).
         #[arg(allow_hyphen_values = true)]
@@ -82,7 +85,8 @@ enum Command {
         /// Grid directory.
         #[arg(long)]
         grid: PathBuf,
-        /// Search radius in cells.
+        /// Search radius in climate cells (soil and regions search 2 layer
+        /// cells).
         #[arg(long, default_value_t = DEFAULT_RADIUS)]
         radius: usize,
     },
@@ -150,11 +154,19 @@ fn run(cli: Cli) -> Result<ExitCode> {
             radius,
         } => {
             let mut g = Grid::open(&grid)?;
-            let r = g.lookup(lat, lon, radius)?;
-            let text =
-                serde_json::to_string_pretty(&r).map_err(|e| PipelineError::Data(e.to_string()))?;
+            let climate = g.lookup(lat, lon, radius)?;
+            let soil = g.soil(lat, lon, LAYER_LOOKUP_RADIUS)?;
+            let regions = g.regions(lat, lon, LAYER_LOOKUP_RADIUS)?;
+            let found = climate.is_some()
+                || soil.is_some()
+                || regions
+                    .as_ref()
+                    .is_some_and(|r| r.wgsrpd_l3.is_some() || r.iso_a2.is_some());
+            let out = serde_json::json!({ "climate": climate, "soil": soil, "regions": regions });
+            let text = serde_json::to_string_pretty(&out)
+                .map_err(|e| PipelineError::Data(e.to_string()))?;
             println!("{text}");
-            Ok(if r.is_some() {
+            Ok(if found {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)

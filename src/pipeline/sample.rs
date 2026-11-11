@@ -6,19 +6,29 @@ use std::path::{Path, PathBuf};
 
 use super::{PipelineError, Result, sha256_file};
 use crate::grid::TileId;
+use crate::layer::LayerTile;
 use crate::lookup::{Lookup, lookup_across, search_tiles};
 use crate::manifest::{FORMAT, FORMAT_VERSION, MIN_FORMAT_VERSION, Manifest};
+use crate::regions::{REGION_BANDS, RegionsLookup};
+use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
 
 /// Decoded tiles kept in memory at most (about 1.4 MB each).
 const CACHE_TILES: usize = 96;
 
-/// A grid directory (`manifest.json` + `tiles/`).
+/// Decoded layer tiles kept in memory at most (about 160 KB each).
+const CACHE_LAYER_TILES: usize = 64;
+
+/// A grid directory (`manifest.json`, `tiles/`, and the site layers'
+/// directories).
 pub struct Grid {
     dir: PathBuf,
     manifest: Manifest,
     paths: HashMap<String, String>,
     cache: HashMap<TileId, Tile>,
+    /// (layer id, tile name) -> path.
+    layer_paths: HashMap<(String, String), String>,
+    layer_cache: HashMap<(String, TileId), LayerTile>,
 }
 
 impl Grid {
@@ -46,11 +56,22 @@ impl Grid {
             .iter()
             .map(|t| (t.name.clone(), t.path.clone()))
             .collect();
+        let layer_paths = manifest
+            .layers
+            .iter()
+            .flat_map(|l| {
+                l.tiles
+                    .iter()
+                    .map(|t| ((l.id.clone(), t.name.clone()), t.path.clone()))
+            })
+            .collect();
         Ok(Self {
             dir: dir.to_path_buf(),
             manifest,
             paths,
             cache: HashMap::new(),
+            layer_paths,
+            layer_cache: HashMap::new(),
         })
     }
 
@@ -101,6 +122,82 @@ impl Grid {
         lookup_across(|id| cache.get(&id), lat, lon, radius).map_err(bad)
     }
 
+    /// Whether the grid has a site layer (`soil`, `regions`).
+    #[must_use]
+    pub fn has_layer(&self, id: &str) -> bool {
+        self.manifest.layers.iter().any(|l| l.id == id)
+    }
+
+    /// Decode the layer tiles a search of `radius` cells around a point
+    /// can reach into the cache.
+    fn load_layer(
+        &mut self,
+        id: &str,
+        bands: usize,
+        lat: f64,
+        lon: f64,
+        radius: usize,
+    ) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = crate::layer::search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.layer_cache.len() + ids.len() > CACHE_LAYER_TILES {
+            self.layer_cache.clear();
+        }
+        for t in ids {
+            let key = (id.to_string(), t);
+            if self.layer_cache.contains_key(&key) {
+                continue;
+            }
+            let Some(rel) = self.layer_paths.get(&(id.to_string(), t.name())) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = LayerTile::decode(&bytes, bands)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.layer_cache.insert(key, tile);
+        }
+        Ok(())
+    }
+
+    /// Soil at a point (searching up to `radius` cells, across tiles);
+    /// `Ok(None)` without a soil layer or without a soil cell nearby.
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn soil(&mut self, lat: f64, lon: f64, radius: usize) -> Result<Option<SoilLookup>> {
+        if !self.has_layer("soil") {
+            return Ok(None);
+        }
+        self.load_layer("soil", SOIL_BANDS, lat, lon, radius)?;
+        let cache = &self.layer_cache;
+        crate::soil::lookup_across(|t| cache.get(&("soil".to_string(), t)), lat, lon, radius)
+            .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
+    }
+
+    /// Regions at a point (searching up to `radius` cells, across tiles);
+    /// `Ok(None)` without a regions layer.
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn regions(&mut self, lat: f64, lon: f64, radius: usize) -> Result<Option<RegionsLookup>> {
+        if !self.has_layer("regions") {
+            return Ok(None);
+        }
+        self.load_layer("regions", REGION_BANDS, lat, lon, radius)?;
+        let cache = &self.layer_cache;
+        let tiles = |t: TileId| cache.get(&("regions".to_string(), t));
+        crate::regions::lookup_across(tiles, lat, lon, radius)
+            .map(Some)
+            .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
+    }
+
     /// Check every tile against the manifest (size and SHA-256); returns
     /// the problems found.
     ///
@@ -108,7 +205,8 @@ impl Grid {
     /// I/O errors other than a missing file.
     pub fn verify(&self) -> Result<Vec<String>> {
         let mut problems = Vec::new();
-        for t in &self.manifest.tiles {
+        let layer_tiles = self.manifest.layers.iter().flat_map(|l| l.tiles.iter());
+        for t in self.manifest.tiles.iter().chain(layer_tiles) {
             let p = self.dir.join(&t.path);
             match std::fs::metadata(&p) {
                 Err(_) => problems.push(format!("missing {}", t.path)),
