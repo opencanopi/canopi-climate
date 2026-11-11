@@ -7,11 +7,15 @@
 //! polygon too small to contain any cell centre (an islet, a microstate)
 //! still takes the cell of its interior point, even from a larger
 //! neighbour, so every area keeps at least one cell.
+//!
+//! Order, so that the result does not depend on chance: a cell inside
+//! several polygons takes the first in source file order; tiny polygons
+//! are written largest first, so the smallest keeps a shared cell.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use geo::{BoundingRect, InteriorPoint, Intersects};
+use geo::{Area, BoundingRect, InteriorPoint, Intersects};
 use geo::{Coord, Geometry, MultiPolygon, Polygon, Rect};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use serde_json::{Value, json};
@@ -257,15 +261,23 @@ pub fn rasterize_global(areas: &Areas, letters: u32) -> GlobalBand {
     }
     // Parts too small for a cell centre (islets, microstates) take their
     // interior point's cell, even from a larger neighbour: otherwise Monaco
-    // or the Vatican would vanish into France or Italy.
+    // or the Vatican would vanish into France or Italy. They are written
+    // largest first, so when several share a cell the smallest keeps it
+    // (ties: by code, then source order); the result does not depend on
+    // the order of the source file.
+    let mut tiny: Vec<(f64, i16, usize)> = (0..areas.parts.len())
+        .filter(|&i| !hit[i])
+        .map(|i| {
+            (
+                areas.parts[i].polygon.unsigned_area(),
+                areas.parts[i].code,
+                i,
+            )
+        })
+        .collect();
+    tiny.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let (mut marked, mut taken, mut no_point) = (0u64, 0u64, 0u64);
-    for part in areas
-        .parts
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !hit[*i])
-        .map(|(_, p)| p)
-    {
+    for part in tiny.iter().map(|&(_, _, i)| &areas.parts[i]) {
         let cell = part
             .polygon
             .interior_point()
@@ -330,9 +342,9 @@ fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
         sources: vec!["wgsrpd-level3".into(), "natural-earth-map-units-50m".into()],
         tiles,
         notes: vec![
-            "A cell takes the polygon containing its centre (boundary included). Polygons too small to contain a cell centre (small islands) mark the cell of their interior point when it is empty.".into(),
+            "A cell takes the polygon containing its centre (boundary included); when several contain it, the first in source file order. A polygon too small to contain any cell centre (an islet, a microstate) then takes the cell of its interior point, overwriting a larger area's code there; when several such polygons share a cell, the smallest keeps it.".into(),
             "Borders are accurate to about half a cell (2.8 km) on top of the sources' own accuracy (Natural Earth 1:50m, WGSRPD level 3). Lookups whose cell is empty (a coastal point) take the nearest coded cell within 2 cells.".into(),
-            "Natural Earth country codes: ISO_A2_EH when two letters, else ISO_A2, else Somaliland -> SO and Northern Cyprus -> CY (de jure); the Siachen Glacier has no country. Natural Earth draws de facto boundaries.".into(),
+            "Natural Earth country codes (map units): Jan Mayen -> SJ as in ISO 3166-1, else ISO_A2_EH when two letters, else ISO_A2, else Somaliland -> SO and Northern Cyprus -> CY (de jure); the Siachen Glacier has no country. Natural Earth draws de facto boundaries.".into(),
             "Tiles where neither band has a code are absent.".into(),
         ],
     }
@@ -398,6 +410,24 @@ mod tests {
         assert_eq!(g.report["codes_missing"], json!([]));
         let next = LayerCell::of(43.73, 7.5).unwrap();
         assert_eq!(g.codes[next.global_index()], encode_code("FR").unwrap());
+    }
+
+    #[test]
+    fn smallest_tiny_part_wins_a_shared_cell_in_any_order() {
+        // Two parts too small for a cell centre (the cell is 7.40-7.45 E,
+        // 43.70-43.75 N, centre 7.425, 43.725) whose interior points fall
+        // in that cell: the smaller one keeps it, whatever the order.
+        let big = polygon![(x: 7.430, y: 43.730), (x: 7.445, y: 43.730), (x: 7.445, y: 43.745), (x: 7.430, y: 43.745)];
+        let small = polygon![(x: 7.432, y: 43.732), (x: 7.435, y: 43.732), (x: 7.435, y: 43.735), (x: 7.432, y: 43.735)];
+        let cell = LayerCell::of(43.74, 7.44).unwrap().global_index();
+        assert_eq!(cell, LayerCell::of(43.733, 7.433).unwrap().global_index());
+        for parts in [
+            vec![("AA", big.clone()), ("BB", small.clone())],
+            vec![("BB", small.clone()), ("AA", big.clone())],
+        ] {
+            let g = rasterize_global(&areas(parts), 2);
+            assert_eq!(g.codes[cell], encode_code("BB").unwrap());
+        }
     }
 
     #[test]
