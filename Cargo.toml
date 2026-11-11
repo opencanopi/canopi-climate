@@ -57,6 +57,10 @@ name = "canopi-climate"
 path = "src/main.rs"
 required-features = ["pipeline"]
 
+[[example]]
+name = "validation"
+required-features = ["pipeline"]
+
 [lints.rust]
 unfulfilled_lint_expectations = "deny"
 missing_docs = "warn"
@@ -74,6 +78,10 @@ needless_for_each = "deny"
 cognitive_complexity = "deny"
 too_many_lines = "deny"
 too_many_arguments = "deny"
+
+# Dependencies (deflate, HDF5 parsing) optimised in tests and dev builds.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 opt-level = 3
