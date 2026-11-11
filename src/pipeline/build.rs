@@ -19,7 +19,7 @@ use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde_json::{Value, json};
 
 use super::aggregate::{block_mean, block_mode};
-use super::netcdf::{list_vars, read_var_f32};
+use super::netcdf::{list_vars, read_var_f32, read_vector_f64};
 use super::{PipelineError, Result, raster, sources};
 use crate::derived::MonthlySummary;
 use crate::grid::{GRID_H, GRID_W};
@@ -295,6 +295,36 @@ pub(super) mod beck_band {
     pub const COUNT: usize = 6;
 }
 
+/// Whether a variable's rows run south to north, from its coordinate
+/// variables: `lon` must start at the 179.95 W cell centre and `lat` at
+/// 89.95 N (north-up) or 89.95 S (south-up), both in 0.1-degree steps.
+///
+/// # Errors
+/// Coordinates that are not the 0.1-degree grid.
+pub(super) fn grid_orientation(lat: &[f64], lon: &[f64]) -> std::result::Result<bool, String> {
+    let steps = |c: &[f64], first: f64, step: f64| {
+        c.iter()
+            .enumerate()
+            .all(|(i, &x)| (x - (first + step * i as f64)).abs() < 1e-4)
+    };
+    if lon.len() != GRID_W || !steps(lon, -179.95, 0.1) {
+        return Err(format!(
+            "lon is not 3600 cells from 179.95 W eastwards (starts {:?})",
+            lon.first()
+        ));
+    }
+    if lat.len() == GRID_H && steps(lat, 89.95, -0.1) {
+        Ok(false)
+    } else if lat.len() == GRID_H && steps(lat, -89.95, 0.1) {
+        Ok(true)
+    } else {
+        Err(format!(
+            "lat is not 1800 cells from either pole (starts {:?})",
+            lat.first()
+        ))
+    }
+}
+
 /// Per-cell summaries of a Beck monthly NetCDF, north-up rows.
 fn beck_summaries(nc: &Path) -> Result<Vec<Vec<f32>>> {
     let vars = list_vars(nc)?;
@@ -304,6 +334,10 @@ fn beck_summaries(nc: &Path) -> Result<Vec<Vec<f32>>> {
             .ok_or_else(|| PipelineError::NetCdf(format!("{}: no {name}", nc.display())))
     };
     let (tv, pv) = (find("air_temperature")?, find("precipitation")?);
+    let lat = read_vector_f64(nc, find("lat")?)?;
+    let lon = read_vector_f64(nc, find("lon")?)?;
+    let south_up = grid_orientation(&lat, &lon)
+        .map_err(|e| PipelineError::NetCdf(format!("{}: {e}", nc.display())))?;
     let n = GRID_W * GRID_H;
     for v in [tv, pv] {
         if v.dims != [12, GRID_H as u64, GRID_W as u64] {
@@ -317,14 +351,6 @@ fn beck_summaries(nc: &Path) -> Result<Vec<Vec<f32>>> {
     let p = read_var_f32(nc, pv)?;
     let (t_fill, p_fill) = (tv.fill, pv.fill);
     let valid = |x: f32, fill: Option<f32>| x.is_finite() && Some(x) != fill && x.abs() < 1e6;
-    // Row 0 is the North Pole (all ocean) or the South Pole (Antarctic
-    // land): pick the orientation with valid data at the south.
-    let valid_in_row = |row: usize| {
-        (0..GRID_W)
-            .filter(|&c| valid(t[row * GRID_W + c], t_fill))
-            .count()
-    };
-    let south_up = valid_in_row(0) > valid_in_row(GRID_H - 1);
     let cells: Vec<Option<MonthlySummary>> = (0..n)
         .into_par_iter()
         .map(|i| {
@@ -480,6 +506,21 @@ mod tests {
             );
             assert!(sources::pinned(dir, &kg).is_ok(), "{kg}");
         }
+    }
+
+    #[test]
+    fn orientation_comes_from_the_coordinates() {
+        let lon: Vec<f64> = (0..GRID_W).map(|i| -179.95 + 0.1 * i as f64).collect();
+        let north: Vec<f64> = (0..GRID_H).map(|i| 89.95 - 0.1 * i as f64).collect();
+        let south: Vec<f64> = north.iter().rev().copied().collect();
+        assert_eq!(grid_orientation(&north, &lon), Ok(false));
+        assert_eq!(grid_orientation(&south, &lon), Ok(true));
+        // Shifted by half a cell, wrong length, or longitudes from 0 E.
+        let shifted: Vec<f64> = north.iter().map(|x| x - 0.05).collect();
+        assert!(grid_orientation(&shifted, &lon).is_err());
+        assert!(grid_orientation(&north[1..], &lon).is_err());
+        let east: Vec<f64> = (0..GRID_W).map(|i| 0.05 + 0.1 * i as f64).collect();
+        assert!(grid_orientation(&north, &east).is_err());
     }
 
     #[test]

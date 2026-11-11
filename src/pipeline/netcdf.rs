@@ -43,6 +43,12 @@ pub struct NcVar {
     pub filters: Vec<u16>,
     /// Fill value for `f32` data.
     pub fill: Option<f32>,
+    /// Contiguous storage: file address and size in bytes.
+    pub contiguous: Option<(u64, u64)>,
+    /// Compact storage: the raw data held in the layout message.
+    pub compact: Option<Vec<u8>>,
+    /// Datatype byte order is big-endian.
+    pub big_endian: bool,
 }
 
 fn err(msg: impl Into<String>) -> PipelineError {
@@ -153,11 +159,29 @@ fn parse_dataspace(b: &[u8], v: &mut NcVar) {
 }
 
 fn parse_layout(b: &[u8], v: &mut NcVar) {
-    // Layout message v3, class 2 (chunked): dimensionality, B-tree address,
-    // chunk sizes (u32 each, the last one being the element size).
-    if b.first() != Some(&3) || b.get(1) != Some(&2) {
+    if b.first() != Some(&3) {
         return;
     }
+    match b.get(1) {
+        // Class 0, compact: u16 size, then the data.
+        Some(&0) => {
+            if let Some(n) = u16_at(b, 2) {
+                v.compact = b.get(4..4 + usize::from(n)).map(<[u8]>::to_vec);
+            }
+            return;
+        }
+        // Class 1, contiguous: address, size.
+        Some(&1) => {
+            if let (Some(a), Some(n)) = (u64_at(b, 2), u64_at(b, 10)) {
+                v.contiguous = Some((a, n));
+            }
+            return;
+        }
+        Some(&2) => {}
+        _ => return,
+    }
+    // Class 2 (chunked): dimensionality, B-tree address, chunk sizes (u32
+    // each, the last one being the element size).
     let Some(&nd) = b.get(2) else { return };
     let Some(addr) = u64_at(b, 3) else { return };
     let dims: Option<Vec<u32>> = (0..usize::from(nd))
@@ -228,6 +252,9 @@ pub fn list_vars(path: &Path) -> Result<Vec<NcVar>> {
             btree_address: 0,
             filters: vec![],
             fill: None,
+            contiguous: None,
+            compact: None,
+            big_endian: false,
         };
         let Some(messages) = v2_messages(&bytes, h.offset) else {
             continue;
@@ -240,6 +267,7 @@ pub fn list_vars(path: &Path) -> Result<Vec<NcVar>> {
                     if let (Some(c), Some(size)) = (b.first(), u32_at(b, 4)) {
                         v.dtype_class = c & 0x0f;
                         v.elem_size = size;
+                        v.big_endian = b.get(1).is_some_and(|f| f & 1 == 1);
                     }
                 }
                 5 => parse_fill(b, &mut v),
@@ -250,7 +278,8 @@ pub fn list_vars(path: &Path) -> Result<Vec<NcVar>> {
                 _ => {}
             }
         }
-        if v.dims.len() >= 2 && v.btree_address != 0 {
+        let stored = v.btree_address != 0 || v.contiguous.is_some() || v.compact.is_some();
+        if !v.dims.is_empty() && stored {
             v.name = link_name_for(&bytes, h.offset).unwrap_or_else(|| format!("@{}", h.offset));
             vars.push(v);
         }
@@ -284,6 +313,48 @@ fn unfilter(mut raw: Vec<u8>, filters: &[u16], mask: u32, elem_size: usize) -> R
         };
     }
     Ok(raw)
+}
+
+/// Read a 1-D floating-point variable (coordinates such as `lat`/`lon`)
+/// stored contiguously or compactly, as `f64`.
+///
+/// # Errors
+/// I/O errors, another layout or datatype, or a size mismatch.
+pub fn read_vector_f64(path: &Path, v: &NcVar) -> Result<Vec<f64>> {
+    if v.dims.len() != 1 || v.dtype_class != 1 || !matches!(v.elem_size, 4 | 8) {
+        return Err(err(format!("{}: not a 1-D float variable", v.name)));
+    }
+    let n = usize::try_from(v.dims[0]).map_err(|e| err(e.to_string()))?;
+    let es = v.elem_size as usize;
+    let raw: Vec<u8> = if let Some(c) = &v.compact {
+        c.clone()
+    } else if let Some((addr, size)) = v.contiguous {
+        let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
+        let a = usize::try_from(addr).map_err(|e| err(e.to_string()))?;
+        let len = usize::try_from(size).map_err(|e| err(e.to_string()))?;
+        bytes
+            .get(a..a.saturating_add(len))
+            .ok_or_else(|| err(format!("{}: data past end of file", v.name)))?
+            .to_vec()
+    } else {
+        return Err(err(format!("{}: not contiguous or compact", v.name)));
+    };
+    if raw.len() < n * es {
+        return Err(err(format!(
+            "{}: {} bytes for {n} values",
+            v.name,
+            raw.len()
+        )));
+    }
+    Ok(raw[..n * es]
+        .chunks_exact(es)
+        .map(|b| match (es, v.big_endian) {
+            (4, false) => f64::from(f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+            (4, true) => f64::from(f32::from_be_bytes([b[0], b[1], b[2], b[3]])),
+            (_, false) => f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+            (_, true) => f64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]),
+        })
+        .collect())
 }
 
 /// One record per chunk. `wbhdf`'s B-tree walk (rev 9c0ff4f) returns each
@@ -435,6 +506,47 @@ mod tests {
             chunk_offsets: off.iter().copied().chain([0]).collect(),
             chunk_address: addr,
         }
+    }
+
+    fn vector_var(es: u32, n: u64) -> NcVar {
+        NcVar {
+            name: "lat".into(),
+            dims: vec![n],
+            elem_size: es,
+            dtype_class: 1,
+            chunk_dims: vec![],
+            btree_address: 0,
+            filters: vec![],
+            fill: None,
+            contiguous: None,
+            compact: None,
+            big_endian: false,
+        }
+    }
+
+    #[test]
+    fn reads_contiguous_and_compact_vectors() {
+        let vals = [89.95f64, 89.85, -89.95];
+        let mut bytes = vec![0u8; 10];
+        for x in vals {
+            bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        let path = std::env::temp_dir().join(format!("canopi-climate-vec-{}", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut v = vector_var(8, 3);
+        v.contiguous = Some((10, 24));
+        assert_eq!(read_vector_f64(&path, &v).unwrap(), vals);
+        let mut c = vector_var(4, 2);
+        c.compact = Some(
+            [1.5f32, -2.0]
+                .iter()
+                .flat_map(|x| x.to_le_bytes())
+                .collect(),
+        );
+        assert_eq!(read_vector_f64(&path, &c).unwrap(), [1.5, -2.0]);
+        v.contiguous = Some((10, 16));
+        assert!(read_vector_f64(&path, &v).is_err());
+        assert!(read_vector_f64(&path, &vector_var(8, 3)).is_err());
     }
 
     #[test]
