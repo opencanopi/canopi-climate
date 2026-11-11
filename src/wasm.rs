@@ -10,9 +10,11 @@
 //!   const res = await fetch(`/data/climate/${dir}/${name}`);  // 404: no data in the tile
 //!   return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
 //! };
-//! const climate = lookup(await get("tiles"), lat, lon);        // object, or null at sea
-//! const soil = lookupSoil(await get("soil"), lat, lon);        // object, or null
-//! const regions = lookupRegions(await get("regions"), lat, lon); // { wgsrpd_l3, iso_a2, ... }
+//! const tiles = await get("tiles"), soilTile = await get("soil"), regionsTile = await get("regions");
+//! // The exports take bytes: guard the missing tiles (no data there).
+//! const climate = tiles ? lookup(tiles, lat, lon) : null;            // object, or null at sea
+//! const soil = soilTile ? lookupSoil(soilTile, lat, lon) : null;     // object, or null
+//! const regions = regionsTile ? lookupRegions(regionsTile, lat, lon) : null; // { wgsrpd_l3, iso_a2, ... }
 //! ```
 
 use wasm_bindgen::prelude::{JsError, JsValue, wasm_bindgen};
