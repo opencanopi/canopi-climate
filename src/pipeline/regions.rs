@@ -320,7 +320,7 @@ pub fn rasterize_global(areas: &Areas, letters: u32) -> GlobalBand {
 }
 
 /// The release layer for the two rasterized bands.
-fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
+pub(crate) fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
     let band = |id: &str, description: &str| VariableSpec {
         id: id.into(),
         unit: "code".into(),

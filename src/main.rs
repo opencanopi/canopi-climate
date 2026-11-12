@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use canopi_climate::layer::LAYER_LOOKUP_RADIUS;
 use canopi_climate::lookup::DEFAULT_RADIUS;
 use canopi_climate::pipeline::build::{self, BuildConfig, Stage};
-use canopi_climate::pipeline::sample::{Grid, sample_csv};
+use canopi_climate::pipeline::sample::{Grid, SampleOptions, sample_csv_with};
 use canopi_climate::pipeline::{PipelineError, Result, sources};
 use clap::{Parser, Subcommand};
 
@@ -71,6 +71,11 @@ enum Command {
         /// Search radius in cells for the nearest complete cell.
         #[arg(long, default_value_t = DEFAULT_RADIUS)]
         radius: usize,
+        /// Append the columns wgsrpd_l3 and iso_a2: each point's WGSRPD
+        /// level-3 area and country, as `lookup` gives them (needs the
+        /// regions layer). Without it the output is unchanged.
+        #[arg(long)]
+        regions: bool,
     },
     /// Look one point up and print JSON: `climate`, `soil` and `regions`
     /// (each `null` when absent; exit code 2 when all are).
@@ -145,7 +150,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
             grid,
             output,
             radius,
-        } => sample(&points, &grid, output.as_deref(), radius),
+            regions,
+        } => sample(
+            &points,
+            &grid,
+            output.as_deref(),
+            &SampleOptions { radius, regions },
+        ),
         Command::Lookup {
             lat,
             lon,
@@ -214,7 +225,12 @@ fn list_sources(verify: Option<PathBuf>) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn sample(points: &Path, grid: &Path, output: Option<&Path>, radius: usize) -> Result<ExitCode> {
+fn sample(
+    points: &Path,
+    grid: &Path,
+    output: Option<&Path>,
+    opts: &SampleOptions,
+) -> Result<ExitCode> {
     let mut g = Grid::open(grid)?;
     let input: Box<dyn std::io::Read> = if points.as_os_str() == "-" {
         Box::new(std::io::stdin().lock())
@@ -227,7 +243,7 @@ fn sample(points: &Path, grid: &Path, output: Option<&Path>, radius: usize) -> R
         )),
         None => Box::new(std::io::stdout().lock()),
     };
-    let s = sample_csv(&mut g, input, output, radius)?;
+    let s = sample_csv_with(&mut g, input, output, opts)?;
     eprintln!(
         "{} points: {} with data, {} without data nearby, {} invalid",
         s.points, s.ok, s.no_data, s.invalid

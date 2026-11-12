@@ -111,8 +111,9 @@ build the median climate tile is 125 KB, soil 45 KB and regions 1.4 KB.
 
 ```sh
 canopi-climate lookup 48.8566 2.3522 --grid out-v0.2          # JSON: climate, soil, regions
-canopi-climate sample points.csv --grid out-v0.1 -o climate.csv
-canopi-climate verify-grid out-v0.1                           # sizes and SHA-256
+canopi-climate sample points.csv --grid out-v0.2 -o climate.csv
+canopi-climate sample points.csv --grid out-v0.2 --regions    # + wgsrpd_l3, iso_a2 columns
+canopi-climate verify-grid out-v0.2                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 
@@ -128,7 +129,10 @@ canopi-climate sources                                        # source files, UR
 `sample` reads a CSV with `lat`/`latitude` and `lon`/`lng`/`longitude`
 columns (and optionally `id`). It writes one row per point and
 period/scenario; points without data get one row with their status. It
-samples climate only.
+samples climate only, unless `--regions` (0.2.1) appends the columns
+`wgsrpd_l3` and `iso_a2`: the codes `lookup` gives for the point, repeated
+on each of its rows (empty when no code is near). Without the flag the
+output is byte-identical to 0.2.0.
 
 ## Features
 

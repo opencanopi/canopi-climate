@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::{PipelineError, Result};
 use crate::grid::TileId;
-use crate::layer::LayerTile;
+use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
 use crate::lookup::{Lookup, lookup_across, search_tiles};
 use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
 use crate::regions::{REGION_BANDS, RegionsLookup};
@@ -293,6 +293,21 @@ fn column(headers: &csv::StringRecord, names: &[&str]) -> Option<usize> {
         .position(|h| names.iter().any(|n| h.trim().eq_ignore_ascii_case(n)))
 }
 
+/// Columns `--regions` appends to every row.
+pub const REGION_COLUMNS: [&str; 2] = ["wgsrpd_l3", "iso_a2"];
+
+/// How [`sample_csv_with`] samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SampleOptions {
+    /// Search radius in climate cells for the nearest complete cell.
+    pub radius: usize,
+    /// Append [`REGION_COLUMNS`]: each point's WGSRPD level-3 and ISO
+    /// 3166-1 alpha-2 codes, as `lookup` gives them (searching
+    /// [`LAYER_LOOKUP_RADIUS`] layer cells), on each of its rows; empty
+    /// when no code is near or the coordinates are invalid.
+    pub regions: bool,
+}
+
 /// Sample a CSV of points (header with `lat`/`latitude` and
 /// `lon`/`lng`/`longitude`, optional `id`) and write one row per point and
 /// slot (long format). Points without data get one row with their status.
@@ -305,6 +320,29 @@ pub fn sample_csv(
     output: impl Write,
     radius: usize,
 ) -> Result<SampleSummary> {
+    let opts = SampleOptions {
+        radius,
+        regions: false,
+    };
+    sample_csv_with(grid, input, output, &opts)
+}
+
+/// [`sample_csv`] with options. Without [`SampleOptions::regions`] the
+/// output is the same as `sample_csv`'s.
+///
+/// # Errors
+/// As [`sample_csv`]; with `regions`, a grid without the regions layer.
+pub fn sample_csv_with(
+    grid: &mut Grid,
+    input: impl Read,
+    output: impl Write,
+    opts: &SampleOptions,
+) -> Result<SampleSummary> {
+    if opts.regions && !grid.has_layer("regions") {
+        return Err(PipelineError::Data(
+            "--regions: the grid has no regions layer (canopi-climate 0.2 or later)".into(),
+        ));
+    }
     let csv_err = |e: csv::Error| PipelineError::Data(e.to_string());
     let mut rdr = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
@@ -316,7 +354,11 @@ pub fn sample_csv(
         .ok_or_else(|| PipelineError::Data("no lon/lng/longitude column".into()))?;
     let id_col = column(&headers, &["id"]);
     let mut w = csv::Writer::from_writer(output);
-    w.write_record(OUT_HEADER).map_err(csv_err)?;
+    let mut header = OUT_HEADER.to_vec();
+    if opts.regions {
+        header.extend(REGION_COLUMNS);
+    }
+    w.write_record(&header).map_err(csv_err)?;
     let mut summary = SampleSummary::default();
     for (n, rec) in rdr.records().enumerate() {
         let rec = rec.map_err(csv_err)?;
@@ -326,23 +368,30 @@ pub fn sample_csv(
             .map_or_else(|| (n + 1).to_string(), str::to_string);
         let lat_s = rec.get(lat_col).unwrap_or("");
         let lon_s = rec.get(lon_col).unwrap_or("");
-        let coords = lat_s.parse::<f64>().ok().zip(lon_s.parse::<f64>().ok());
-        let found = match coords {
-            Some((lat, lon)) if TileId::of(lat, lon).is_some() => grid.lookup(lat, lon, radius)?,
-            _ => {
-                summary.invalid += 1;
-                write_status(&mut w, &id, lat_s, lon_s, "invalid")?;
-                continue;
-            }
+        let point = Point {
+            id: &id,
+            lat: lat_s,
+            lon: lon_s,
         };
-        match found {
+        let coords = lat_s.parse::<f64>().ok().zip(lon_s.parse::<f64>().ok());
+        let Some((lat, lon)) = coords.filter(|&(lat, lon)| TileId::of(lat, lon).is_some()) else {
+            summary.invalid += 1;
+            write_status(&mut w, &point, "invalid", opts.regions.then(Codes::default))?;
+            continue;
+        };
+        let codes = if opts.regions {
+            Some(region_codes(grid, lat, lon)?)
+        } else {
+            None
+        };
+        match grid.lookup(lat, lon, opts.radius)? {
             None => {
                 summary.no_data += 1;
-                write_status(&mut w, &id, lat_s, lon_s, "no_data")?;
+                write_status(&mut w, &point, "no_data", codes)?;
             }
             Some(f) => {
                 summary.ok += 1;
-                write_rows(&mut w, &id, lat_s, lon_s, &f)?;
+                write_rows(&mut w, &point, &f, codes.as_ref())?;
             }
         }
     }
@@ -350,31 +399,54 @@ pub fn sample_csv(
     Ok(summary)
 }
 
+/// A point as read (coordinates kept as written).
+struct Point<'a> {
+    id: &'a str,
+    lat: &'a str,
+    lon: &'a str,
+}
+
+/// Region codes of a point (empty strings: none near).
+#[derive(Default)]
+struct Codes {
+    wgsrpd_l3: String,
+    iso_a2: String,
+}
+
+fn region_codes(grid: &mut Grid, lat: f64, lon: f64) -> Result<Codes> {
+    let r = grid.regions(lat, lon, LAYER_LOOKUP_RADIUS)?;
+    Ok(r.map_or_else(Codes::default, |r| Codes {
+        wgsrpd_l3: r.wgsrpd_l3.unwrap_or_default(),
+        iso_a2: r.iso_a2.unwrap_or_default(),
+    }))
+}
+
 fn write_status<W: Write>(
     w: &mut csv::Writer<W>,
-    id: &str,
-    lat: &str,
-    lon: &str,
+    p: &Point<'_>,
     status: &str,
+    codes: Option<Codes>,
 ) -> Result<()> {
-    let mut row = vec![id, lat, lon, status];
+    let mut row = vec![p.id, p.lat, p.lon, status];
     row.resize(OUT_HEADER.len(), "");
+    if let Some(c) = &codes {
+        row.extend([c.wgsrpd_l3.as_str(), c.iso_a2.as_str()]);
+    }
     w.write_record(&row)
         .map_err(|e| PipelineError::Data(e.to_string()))
 }
 
 fn write_rows<W: Write>(
     w: &mut csv::Writer<W>,
-    id: &str,
-    lat: &str,
-    lon: &str,
+    pt: &Point<'_>,
     f: &Lookup,
+    codes: Option<&Codes>,
 ) -> Result<()> {
     for p in &f.periods {
-        let row = [
-            id.to_string(),
-            lat.to_string(),
-            lon.to_string(),
+        let mut row = vec![
+            pt.id.to_string(),
+            pt.lat.to_string(),
+            pt.lon.to_string(),
             "ok".to_string(),
             format!("{:.2}", f.cell_lat),
             format!("{:.2}", f.cell_lon),
@@ -394,6 +466,9 @@ fn write_rows<W: Write>(
             p.dry_months.to_string(),
             f.tile.clone(),
         ];
+        if let Some(c) = codes {
+            row.extend([c.wgsrpd_l3.clone(), c.iso_a2.clone()]);
+        }
         w.write_record(&row)
             .map_err(|e| PipelineError::Data(e.to_string()))?;
     }
@@ -429,6 +504,106 @@ mod tests {
         )
         .unwrap();
         dir
+    }
+
+    /// [`grid_dir`] plus the synthetic regions layer.
+    fn grid_dir_with_regions(name: &str) -> PathBuf {
+        let dir = grid_dir(name);
+        std::fs::create_dir_all(dir.join("regions")).unwrap();
+        let t = crate::layer::synthetic::regions();
+        let rel = format!("regions/{}", t.id().file_name());
+        let bytes = cog::write_layer_tile_checked(&t, &dir.join(&rel)).unwrap();
+        let spec = crate::manifest::TileSpec {
+            name: t.id().name(),
+            path: rel,
+            bytes: bytes.len() as u64,
+            sha256: crate::pipeline::sha256_bytes(&bytes),
+            complete_cells: 0,
+        };
+        let path = dir.join("manifest.json");
+        let mut m: Manifest =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        m.layers
+            .push(crate::pipeline::regions::layer_spec(vec![spec]));
+        std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
+        dir
+    }
+
+    /// Points for the sampling goldens: inland, snapped, sea, a point
+    /// with regions but no climate (41 N 1 E), invalid, no id column.
+    const SAMPLE_POINTS: &str = "latitude,longitude\n45.95,5.05\n45.95,2.05\n49.5,9.5\n41.0,1.0\n45.25,3.25\nabc,1\n50.05,0.05\n91,0\n";
+
+    /// `sample` output without `--regions` stays byte-identical to v0.2.0
+    /// (the golden was written by the v0.2.0 code, before the flag).
+    #[test]
+    fn csv_sampling_matches_the_v0_2_0_golden() {
+        let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-v0.2.0.csv");
+        for dir in [grid_dir("golden"), grid_dir_with_regions("golden-regions")] {
+            let mut g = Grid::open(&dir).unwrap();
+            let mut out = Vec::new();
+            sample_csv(&mut g, SAMPLE_POINTS.as_bytes(), &mut out, 2).unwrap();
+            if std::env::var_os("UPDATE_FIXTURES").is_some() {
+                std::fs::write(&golden, &out).unwrap();
+            }
+            assert_eq!(
+                String::from_utf8(out).unwrap(),
+                std::fs::read_to_string(&golden).unwrap()
+            );
+        }
+    }
+
+    /// `--regions`: two more columns, the codes `lookup` gives for the
+    /// point, the same on each of its rows (no-data points included).
+    #[test]
+    fn csv_sampling_with_regions_adds_the_lookup_codes() {
+        let dir = grid_dir_with_regions("with-regions");
+        let mut g = Grid::open(&dir).unwrap();
+        let opts = SampleOptions {
+            radius: 2,
+            regions: true,
+        };
+        let mut out = Vec::new();
+        let s = sample_csv_with(&mut g, SAMPLE_POINTS.as_bytes(), &mut out, &opts).unwrap();
+        assert_eq!((s.points, s.ok, s.no_data, s.invalid), (8, 4, 2, 2));
+        let text = String::from_utf8(out).unwrap();
+        let mut lines = text.lines();
+        let mut header = OUT_HEADER.to_vec();
+        header.extend(REGION_COLUMNS);
+        assert_eq!(lines.next(), Some(header.join(",").as_str()));
+        let golden = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-v0.2.0.csv"),
+        )
+        .unwrap();
+        let mut rows = 0;
+        for (line, old) in lines.zip(golden.lines().skip(1)) {
+            rows += 1;
+            let (base, codes) = line.rsplit_once(',').map_or((line, ""), |(a, b)| (a, b));
+            let (base, l3) = base.rsplit_once(',').unwrap();
+            assert_eq!(base, old, "the v0.2.0 columns are unchanged");
+            let f: Vec<&str> = old.split(',').collect();
+            let want = match (f[1].parse::<f64>(), f[2].parse::<f64>()) {
+                (Ok(lat), Ok(lon)) if f[3] != "invalid" => {
+                    let r = g
+                        .regions(lat, lon, crate::layer::LAYER_LOOKUP_RADIUS)
+                        .unwrap()
+                        .unwrap();
+                    (
+                        r.wgsrpd_l3.unwrap_or_default(),
+                        r.iso_a2.unwrap_or_default(),
+                    )
+                }
+                _ => (String::new(), String::new()),
+            };
+            assert_eq!((l3.to_string(), codes.to_string()), want, "{line}");
+        }
+        assert_eq!(rows, golden.lines().count() - 1);
+        assert!(text.contains("\n4,41.0,1.0,no_data,"));
+        assert!(text.contains(",FRA,FR\n"), "{text}");
+        assert!(text.contains(",SWI,CH\n"), "{text}");
+        // A grid without the regions layer refuses the flag.
+        let mut plain = Grid::open(&grid_dir("no-regions")).unwrap();
+        let err = sample_csv_with(&mut plain, SAMPLE_POINTS.as_bytes(), Vec::new(), &opts);
+        assert!(err.is_err());
     }
 
     #[test]
