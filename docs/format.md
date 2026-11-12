@@ -21,6 +21,8 @@ A grid release is one tar (`canopi-climate-grid-vX.Y.Z.tar`) holding:
 | `tiles/<name>.tif` | Climate tiles, one per 10° tile with land. |
 | `soil/<name>.tif`, `regions/<name>.tif` | Site-layer tiles (`layers` in the manifest). |
 | `ATTRIBUTION.md` | Sources, licences, citations. |
+| `build-report.json` | The build's checks and counts (land cells, class/means contradictions, clamped extremes, source comparisons; `layers`: soil fill by distance, region codes). Informative: a reader does not need it. |
+| `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md` and every tile. |
 
 A tile with no data is absent, not empty. A reader MUST treat an absent tile (listed nowhere in the
 manifest) as "no data here", not as an error.
@@ -46,10 +48,10 @@ readable TIFF or reach past the end of the file), and a writer MUST NOT produce 
 |---|---|
 | Byte order and variant | Little-endian classic TIFF (`II*\0`). Big-endian (`MM`) and BigTIFF (`II+\0`) are refused. |
 | Images | Exactly one IFD (no overviews, no masks). |
-| Size | `side × side` pixels: 100 for climate tiles, 200 for layer tiles. |
-| Samples | `SamplesPerPixel` present (no default) and = the band count; `BitsPerSample` 16 for every sample; `SampleFormat` present and 2 (signed integer) for every sample, given once or per band. |
 | Bounds | The IFD, the values of every IFD entry (whatever its tag) and the tile data lie inside the file; anything past the end is `TileError::Tiff`. An entry of unknown field type counts one byte per value. |
 | Field types | `ImageWidth`, `ImageLength`, `BitsPerSample`, `Compression`, `SamplesPerPixel`, `PlanarConfiguration`, `Predictor`, `TileWidth`, `TileLength`, `TileOffsets`, `TileByteCounts` and `SampleFormat` are SHORT or LONG; `ModelPixelScale` and `ModelTiepoint` are DOUBLE. Other entries may have any type. |
+| Size | `side × side` pixels: 100 for climate tiles, 200 for layer tiles. |
+| Samples | `SamplesPerPixel` present (no default) and = the band count; `BitsPerSample` 16 for every sample; `SampleFormat` present and 2 (signed integer) for every sample, given once or per band. |
 | Interleave | `PlanarConfiguration` absent or 1 (pixel-interleaved). |
 | Compression | `Compression` 8 or 32946 (Deflate). |
 | Predictor | `Predictor` absent or 1 (none). |
@@ -208,11 +210,14 @@ cell within the radius: no answer (`null`).
 **Soil answer**: the cell fields above plus `depth` (`"0-30 cm"`), `ph_h2o`, `sand_pct`, `clay_pct`,
 `silt_pct` = `round1(max(0, 100 − sand − clay))`, `texture` (the USDA class id, see the `texture`
 table; null outside the triangle), `filled` (`fill_distance > 0`) and `fill_distance_cells`. No soil
-within the radius: `null`.
+within the radius, or a grid whose manifest lists no `soil` layer: `null`.
 
 **Regions answer**: `wgsrpd_l3`, `iso_a2`, `wgsrpd_l3_distance_cells`, `iso_a2_distance_cells` (each
-null when that code is not found) and `tile` (the point's own tile). Always an object; codes only, no
-names.
+null when that code is not found) and `tile` (the point's own tile). Codes only, no names. On a grid
+whose manifest lists a `regions` layer the answer is always an object, even where no code is found;
+on a grid without one (a 0.1.0 grid) it is `null` (`Grid::site`, `vectors::site`). The WebAssembly
+`lookupRegions` takes a regions tile, so it always returns an object; the host passes `null` itself
+when it has no tile.
 
 ## Errors
 
