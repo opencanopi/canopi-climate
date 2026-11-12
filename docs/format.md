@@ -48,7 +48,7 @@ readable TIFF or reach past the end of the file), and a writer MUST NOT produce 
 |---|---|
 | Byte order and variant | Little-endian classic TIFF (`II*\0`). Big-endian (`MM`) and BigTIFF (`II+\0`) are refused. |
 | Images | Exactly one IFD (no overviews, no masks). |
-| Bounds | The IFD, the values of every IFD entry (whatever its tag) and the tile data lie inside the file; anything past the end is `TileError::Tiff`. An entry of unknown field type counts one byte per value. |
+| Bounds | The IFD, the values of every IFD entry (whatever its tag) and the tile data lie inside the file; anything past the end is `TileError::Tiff`. Value sizes follow TIFF 6.0 and BigTIFF (an unknown type counts one byte per value); the website's reader knows only BYTE, SHORT, LONG, DOUBLE and LONG8 sizes and counts the rest as one byte, so the crate may refuse an out-of-line value the site never reads (see below). |
 | Field types | `ImageWidth`, `ImageLength`, `BitsPerSample`, `Compression`, `SamplesPerPixel`, `PlanarConfiguration`, `Predictor`, `TileWidth`, `TileLength`, `TileOffsets`, `TileByteCounts` and `SampleFormat` are SHORT or LONG; `ModelPixelScale` and `ModelTiepoint` are DOUBLE. Other entries may have any type. |
 | Size | `side × side` pixels: 100 for climate tiles, 200 for layer tiles. |
 | Samples | `SamplesPerPixel` present (no default) and = the band count; `BitsPerSample` 16 for every sample; `SampleFormat` present and 2 (signed integer) for every sample, given once or per band. |
@@ -62,9 +62,9 @@ readable TIFF or reach past the end of the file), and a writer MUST NOT produce 
 The committed fixture `tests/fixtures/synthetic-n50e000.tif` pins the layout, and the tests
 `refuses_what_the_website_reader_refuses`, `refuses_what_the_website_reader_refuses_in_the_ifd` and
 `accepts_a_per_band_sample_format` (`src/tile.rs`) cover each rule. The crate refuses everything the
-website's reader (`tiff.ts` `readTileHeader`) refuses; it is stricter in two places, so a file both
+website's reader (`tiff.ts` `readTileHeader`) refuses; it is stricter in three places, so a file both
 accept is always a valid tile: it requires every `SampleFormat` value to be 2 (the site reads the
-first), and it refuses SHORT or LONG georeferencing (the site also reads them as numbers).
+first), and it refuses SHORT or LONG georeferencing (the site also reads them as numbers), and it sizes RATIONAL and other wide types by their real width, so an out-of-line value past the end of the file is refused where the site, counting one byte, finds it inline.
 
 ## Georeferencing and grid
 

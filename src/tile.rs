@@ -192,7 +192,9 @@ fn check_ifd(bytes: &[u8]) -> Result<(), TileError> {
         let (tag, ty) = (u16_at(e).unwrap_or(0), u16_at(e + 2).unwrap_or(0));
         let count = u64::from(u32_at(e + 4).unwrap_or(0));
         // Value sizes of TIFF 6.0 and BigTIFF; an unknown type counts as one
-        // byte per value, as in the website's reader.
+        // byte per value. The website's reader sizes only BYTE, SHORT, LONG,
+        // DOUBLE and LONG8 and counts other types as one byte, so this check
+        // can be stricter than the site (docs/format.md, Container).
         let width: u64 = match ty {
             3 | 8 => 2,
             4 | 9 | 11 | 13 => 4,
