@@ -128,6 +128,17 @@ pub(crate) fn decode_raster(
     cell_deg: f64,
     bands: usize,
 ) -> Result<(TileId, Vec<i16>), TileError> {
+    match bytes.get(..4) {
+        Some(b"MM\0*" | b"MM\0+") => {
+            return Err(TileError::Layout("not little-endian TIFF".into()));
+        }
+        Some(b"II+\0") => {
+            return Err(TileError::Layout(
+                "not a classic TIFF (BigTIFF is not read)".into(),
+            ));
+        }
+        _ => {}
+    }
     let mut d = Decoder::new(Cursor::new(bytes))?;
     let (w, h) = d.dimensions()?;
     if (w as usize, h as usize) != (side, side) {
@@ -135,6 +146,7 @@ pub(crate) fn decode_raster(
             "{w}x{h}, expected {side}x{side}"
         )));
     }
+    check_layout(&mut d, side, bands)?;
     let id = georef_tile(&mut d, cell_deg)?;
     let data = match d.read_image()? {
         DecodingResult::I16(v) => v,
@@ -148,6 +160,58 @@ pub(crate) fn decode_raster(
         )));
     }
     Ok((id, data))
+}
+
+/// The header rules of the website's reader (`tiff.ts` `readTileHeader`),
+/// beyond what the `tiff` crate already refuses: one image, `bands` signed
+/// 16-bit samples per cell, pixel-interleaved, Deflate without predictor,
+/// one internal tile covering the image (docs/format.md, Container).
+fn check_layout<R: std::io::Read + std::io::Seek>(
+    d: &mut Decoder<R>,
+    side: usize,
+    bands: usize,
+) -> Result<(), TileError> {
+    let layout = |m: String| Err(TileError::Layout(m));
+    if d.more_images() {
+        return layout("more than one image (overviews are not read)".into());
+    }
+    let short = |d: &mut Decoder<R>, tag: Tag| -> Result<Option<u64>, TileError> {
+        Ok(d.find_tag_unsigned::<u64>(tag)?)
+    };
+    let samples = short(d, Tag::SamplesPerPixel)?.unwrap_or(1);
+    if samples != bands as u64 {
+        return layout(format!("{samples} bands, expected {bands}"));
+    }
+    let bits = d.find_tag_unsigned_vec::<u64>(Tag::BitsPerSample)?;
+    if bits.is_none_or(|b| b.iter().any(|&x| x != 16)) {
+        return layout("samples are not 16-bit".into());
+    }
+    if short(d, Tag::SampleFormat)? != Some(2) {
+        return layout("samples are not signed integers".into());
+    }
+    let compression = short(d, Tag::Compression)?;
+    if !matches!(compression, Some(8 | 32946)) {
+        return layout(format!("compression {compression:?}, expected Deflate"));
+    }
+    if short(d, Tag::Predictor)?.unwrap_or(1) != 1 {
+        return layout("a predictor is set".into());
+    }
+    if short(d, Tag::PlanarConfiguration)?.unwrap_or(1) != 1 {
+        return layout("not pixel-interleaved".into());
+    }
+    let tw = short(d, Tag::TileWidth)?.unwrap_or(0);
+    let tl = short(d, Tag::TileLength)?.unwrap_or(0);
+    let offsets = d
+        .find_tag_unsigned_vec::<u64>(Tag::TileOffsets)?
+        .map_or(0, |v| v.len());
+    let counts = d
+        .find_tag_unsigned_vec::<u64>(Tag::TileByteCounts)?
+        .map_or(0, |v| v.len());
+    let side = side as u64;
+    if tw < side || tl < side || offsets != 1 || counts != 1 {
+        return layout("not one internal tile covering the image".into());
+    }
+    Ok(())
 }
 
 /// The tile named by the GeoTIFF pixel scale and tie point.
@@ -260,6 +324,77 @@ mod tests {
         assert_eq!(t.get(0, BANDS), NODATA);
         assert_eq!(t.get(TILE_LEN, 0), NODATA);
         assert!(t.pixel(TILE_LEN).is_empty());
+    }
+
+    /// The fixture with IFD entry `tag` rewritten to `new_tag` holding the
+    /// inline SHORT `value` (the fixture's IFD is sorted, so a rename keeps
+    /// it sorted only for neighbouring tag numbers; the decoder does not
+    /// care either way).
+    fn patched(tag: u16, new_tag: u16, value: u16) -> Vec<u8> {
+        let mut b = FIXTURE.to_vec();
+        let u16_at = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
+        let ifd = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
+        let n = usize::from(u16_at(&b, ifd));
+        let entry = (0..n)
+            .map(|i| ifd + 2 + 12 * i)
+            .find(|&e| u16_at(&b, e) == tag)
+            .unwrap();
+        b[entry..entry + 2].copy_from_slice(&new_tag.to_le_bytes());
+        b[entry + 2..entry + 4].copy_from_slice(&3u16.to_le_bytes());
+        b[entry + 4..entry + 8].copy_from_slice(&1u32.to_le_bytes());
+        b[entry + 8..entry + 12].copy_from_slice(&u32::from(value).to_le_bytes());
+        b
+    }
+
+    fn layout_error(bytes: &[u8], words: &str) {
+        match Tile::decode(bytes) {
+            Err(TileError::Layout(m)) => assert!(m.contains(words), "{m}"),
+            other => panic!("expected a layout error naming {words:?}, got {other:?}"),
+        }
+    }
+
+    /// The website's reader (`src/lib/climate/tiff.ts` `readTileHeader`)
+    /// refuses these layouts; the crate refuses them too, so the writer can
+    /// never ship a tile the site cannot read (docs/format.md, Container).
+    #[test]
+    fn refuses_what_the_website_reader_refuses() {
+        let mut big_endian = FIXTURE.to_vec();
+        big_endian[..4].copy_from_slice(b"MM\0*");
+        layout_error(&big_endian, "little-endian");
+        let mut big_tiff = FIXTURE.to_vec();
+        big_tiff[2] = 43;
+        big_tiff[4..8].copy_from_slice(&[8, 0, 0, 0]);
+        layout_error(&big_tiff, "classic TIFF");
+        // PlanarConfiguration (284) renamed to Predictor (317) = 2: planar
+        // falls back to 1 (chunky), the predictor is set.
+        layout_error(&patched(284, 317, 2), "predictor");
+        layout_error(&patched(284, 317, 3), "predictor");
+        assert!(
+            Tile::decode(&patched(284, 317, 1)).is_ok(),
+            "predictor 1 is none"
+        );
+        // Planar layout: the tiff crate already refuses it with this
+        // fixture's single tile offset; the check backs it up.
+        assert!(Tile::decode(&patched(284, 284, 2)).is_err());
+        layout_error(&patched(339, 339, 1), "signed");
+        layout_error(&patched(259, 259, 1), "Deflate");
+        assert!(
+            Tile::decode(&patched(259, 259, 32946)).is_ok(),
+            "old Deflate code"
+        );
+        // A second IFD (overviews): a copy of the first appended to the file.
+        let mut two = FIXTURE.to_vec();
+        let ifd = u32::from_le_bytes([two[4], two[5], two[6], two[7]]) as usize;
+        let n = usize::from(u16::from_le_bytes([two[ifd], two[ifd + 1]]));
+        let next = ifd + 2 + 12 * n;
+        two.resize(two.len().next_multiple_of(2), 0);
+        let copy = two.len();
+        two.extend_from_within(ifd..next + 4);
+        two[next..next + 4].copy_from_slice(&(copy as u32).to_le_bytes());
+        layout_error(&two, "more than one image");
+        // Internal tile smaller than the image: refused, whichever layer
+        // (the tiff crate or the check) sees it first.
+        assert!(Tile::decode(&patched(322, 322, 56)).is_err());
     }
 
     #[test]

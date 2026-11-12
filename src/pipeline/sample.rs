@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use super::{PipelineError, Result, sha256_file};
+use super::{PipelineError, Result};
 use crate::grid::TileId;
 use crate::layer::LayerTile;
 use crate::lookup::{Lookup, lookup_across, search_tiles};
@@ -196,32 +196,58 @@ impl Grid {
             .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
     }
 
-    /// Check every tile against the manifest (size and SHA-256); returns
-    /// the problems found.
+    /// Check every tile against the manifest (size and SHA-256) and decode
+    /// it with the header rules of docs/format.md (the website's reader
+    /// refuses the same layouts); returns the problems found.
     ///
     /// # Errors
     /// I/O errors other than a missing file.
     pub fn verify(&self) -> Result<Vec<String>> {
         let mut problems = Vec::new();
-        let layer_tiles = self.manifest.layers.iter().flat_map(|l| l.tiles.iter());
-        for t in self.manifest.tiles.iter().chain(layer_tiles) {
+        let climate = self.manifest.tiles.iter().map(|t| (t, None));
+        let layer_tiles = self
+            .manifest
+            .layers
+            .iter()
+            .flat_map(|l| l.tiles.iter().map(|t| (t, Some(l.bands.len()))));
+        for (t, layer_bands) in climate.chain(layer_tiles) {
             let p = self.dir.join(&t.path);
-            match std::fs::metadata(&p) {
-                Err(_) => problems.push(format!("missing {}", t.path)),
-                Ok(m) if m.len() != t.bytes => problems.push(format!(
+            match std::fs::read(&p) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    problems.push(format!("missing {}", t.path));
+                }
+                Err(e) => return Err(PipelineError::io(&p, e)),
+                Ok(b) if b.len() as u64 != t.bytes => problems.push(format!(
                     "{}: {} bytes, expected {}",
                     t.path,
-                    m.len(),
+                    b.len(),
                     t.bytes
                 )),
-                Ok(_) => {
-                    if sha256_file(&p)? != t.sha256 {
-                        problems.push(format!("{}: checksum mismatch", t.path));
+                Ok(b) if super::sha256_bytes(&b) != t.sha256 => {
+                    problems.push(format!("{}: checksum mismatch", t.path));
+                }
+                Ok(b) => {
+                    if let Some(p) = decode_problem(&b, layer_bands, &t.name) {
+                        problems.push(format!("{}: {p}", t.path));
                     }
                 }
             }
         }
         Ok(problems)
+    }
+}
+
+/// Why a tile file does not decode as the tile `name` (`None`: it does).
+/// `layer_bands`: `None` for a climate tile, else the layer's band count.
+fn decode_problem(bytes: &[u8], layer_bands: Option<usize>, name: &str) -> Option<String> {
+    let id = match layer_bands {
+        None => Tile::decode(bytes).map(|t| t.id()),
+        Some(bands) => LayerTile::decode(bytes, bands).map(|t| t.id()),
+    };
+    match id {
+        Err(e) => Some(e.to_string()),
+        Ok(id) if id.name() != name => Some(format!("holds tile {id}")),
+        Ok(_) => None,
     }
 }
 
@@ -420,6 +446,22 @@ mod tests {
         let r = g.lookup(50.05, 0.05, 2).unwrap().unwrap();
         assert_eq!((r.tile.as_str(), r.distance_cells), ("n50e000", 1.0));
         assert!(g.lookup(95.0, 0.0, 2).is_err());
+    }
+
+    #[test]
+    fn verify_decodes_every_tile() {
+        let dir = grid_dir("verify-decode");
+        let path = dir.join("manifest.json");
+        let mut m: Manifest =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // The same file listed under another tile's name: size and checksum
+        // match, the georeferencing does not.
+        let mut other = m.tiles[0].clone();
+        other.name = "n40e000".into();
+        m.tiles.push(other);
+        std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
+        let problems = Grid::open(&dir).unwrap().verify().unwrap();
+        assert_eq!(problems, ["tiles/n50e000.tif: holds tile n50e000"]);
     }
 
     #[test]
