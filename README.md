@@ -264,15 +264,42 @@ part of the grid.
 
 ## Development
 
+The tile format is specified in [docs/format.md](docs/format.md) (normative); a change to it
+follows its compatibility rule.
+
+One-time setup per checkout, for the tracked git hooks (pre-commit: `cargo fmt --check`; pre-push:
+clippy and the tests, the pipeline tests when the push touches them). Cargo in the hooks runs in a
+memory-capped `systemd-run` scope when one is available:
+
 ```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings                     # also --features pipeline, --features wasm
-cargo test && cargo test --features pipeline
+git config core.hooksPath .githooks
+```
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --features pipeline -- -D warnings   # covers the default build
+cargo clippy --all-targets --features wasm -- -D warnings
+cargo test && cargo test --features pipeline                     # includes the synthetic-vectors staleness check
+UPDATE_FIXTURES=1 cargo test                                     # regenerate tests/fixtures/synthetic-expected.json
 cargo build --target wasm32-unknown-unknown --profile wasm --features wasm
 wasm-bindgen --target nodejs --out-dir pkg-node target/wasm32-unknown-unknown/wasm/canopi_climate.wasm
-node scripts/wasm-smoke.cjs
+node scripts/wasm-smoke.cjs                                      # includes the single-tile synthetic vectors
+cargo deny check bans licenses sources                           # cargo-deny 0.20
 CANOPI_CLIMATE_GRID=out-v0.2 cargo test --release --features pipeline -- --ignored   # against a built grid
+canopi-climate vectors --grid out-v0.2 --points vectors/points.csv --check vectors/lookup.json
 ```
+
+CI tiers:
+
+| Where | When | What |
+|---|---|---|
+| `.githooks` | commit, push | fmt; clippy and tests |
+| `ci.yml` | every push and pull request | fmt, clippy (pipeline, wasm), tests, cargo-deny, wasm build and smoke |
+| `ci.yml` grid job | every push to main, by hand | the `#[ignore]` tests, `verify-grid` and the `vectors/lookup.json` check, on the grid pinned in `release/grid.json` (cached by SHA-256) |
+| `advisories.yml` | push to main, weekly, by hand | osv-scanner over `Cargo.lock`, exceptions in `osv-scanner.toml` |
+| `release.yml` | a `v*` tag, by hand | grid tests, vectors regenerated and checked, size report; uploads `lookup.json` to the release (`--clobber`, safe to re-run) |
+
+Dependency updates come from Renovate (`renovate.json`) once its GitHub app is installed.
 
 ## Licence
 

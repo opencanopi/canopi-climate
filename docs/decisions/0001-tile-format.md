@@ -2,6 +2,7 @@
 
 - Status: accepted (2026-11-11)
 - Context: consortium v2 plan, phase P3a; ADR "consortium v2 architecture" §5 and §7 (website repository).
+- Contract: the normative format these decisions produce is [docs/format.md](../format.md).
 
 ## Question
 

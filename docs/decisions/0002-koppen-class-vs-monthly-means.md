@@ -1,6 +1,7 @@
 # 0002: The Köppen class is Beck's published class, and contradictions are reported
 
 - Status: accepted (2026-11-11)
+- Contract: the normative format these decisions produce is [docs/format.md](../format.md).
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 - Status: proposed (2026-11-11), awaiting review
 - Context: consortium v2 plan, phase P3b; ADR "consortium v2 architecture" (website repository). Builds on [0001](0001-tile-format.md).
+- Contract: the normative format these decisions produce is [docs/format.md](../format.md).
 
 ## Question
 
