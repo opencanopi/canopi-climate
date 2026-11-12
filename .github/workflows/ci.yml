@@ -1,9 +1,18 @@
 name: CI
 
+# Tiers (README, Development): pre-commit fmt and pre-push clippy + tests run locally (.githooks); this
+# workflow runs everything on each push and pull request; the grid job runs the tests that need the
+# release grid on each push to main; advisories.yml scans for advisories; release.yml publishes the vectors.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# One run per ref: a newer push cancels an older run, except on main, where every commit finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -16,28 +25,44 @@ jobs:
   lint-test:
     name: fmt, clippy, tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       # rust-toolchain.toml pins the toolchain, rustfmt, clippy and the wasm target.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets -- -D warnings
+      # The pipeline feature covers the default build (no code is cfg(not(feature = "pipeline"))).
       - run: cargo clippy --all-targets --features pipeline -- -D warnings
       - run: cargo clippy --all-targets --features wasm -- -D warnings
+      # Default features include the synthetic-expected.json staleness check (src/vectors.rs).
       - run: cargo test
       - run: cargo test --features pipeline
+
+  deny:
+    name: cargo-deny (bans, licences, sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      # Advisories: advisories.yml (OSV), the one advisory scanner.
+      - run: cargo deny check bans licenses sources
 
   wasm:
     name: wasm32 build and smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          # Must match the wasm-bindgen version pinned in Cargo.toml.
+          # Must match the wasm-bindgen version pinned in Cargo.toml (Renovate groups the two).
           tool: wasm-bindgen-cli@0.2.130
       - uses: actions/setup-node@v4
         with:
@@ -45,8 +70,27 @@ jobs:
       - run: cargo build --target wasm32-unknown-unknown --profile wasm --features wasm
       - run: wasm-bindgen --target nodejs --out-dir pkg-node target/wasm32-unknown-unknown/wasm/canopi_climate.wasm
       - run: wasm-bindgen --target web --out-dir pkg target/wasm32-unknown-unknown/wasm/canopi_climate.wasm
+      # Includes every single-tile point of tests/fixtures/synthetic-expected.json.
       - run: node scripts/wasm-smoke.cjs
       - name: Size
         run: |
           ls -l pkg/canopi_climate_bg.wasm
           echo "gzip: $(gzip -9c pkg/canopi_climate_bg.wasm | wc -c) bytes"
+
+  grid:
+    name: grid tests (pinned release grid)
+    # Every push to main, and by hand; pull requests skip the 99 MB download.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/grid
+      # The 8 tests marked #[ignore] (validation against ERA5, the v0.1 reader on the release, site layers).
+      - run: cargo test --features pipeline -- --ignored
+      - name: Every tile decodes (verify-grid)
+        run: cargo run --features pipeline -- verify-grid "$CANOPI_CLIMATE_GRID"
+      - name: vectors/lookup.json is current
+        run: cargo run --features pipeline -- vectors --grid "$CANOPI_CLIMATE_GRID" --points vectors/points.csv --check vectors/lookup.json

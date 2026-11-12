@@ -1,0 +1,61 @@
+name: Pinned grid
+description: >-
+  The grid release named in release/grid.json, extracted to $RUNNER_TEMP/grid and exported as
+  CANOPI_CLIMATE_GRID: restored from the Actions cache keyed by its SHA-256, else downloaded from the
+  release with gh. A download whose SHA-256 differs from the pin fails, naming both.
+
+runs:
+  using: composite
+  steps:
+    - id: pin
+      name: Read release/grid.json
+      shell: bash
+      run: |
+        set -euo pipefail
+        for k in tag asset sha256 manifest_sha256; do
+          echo "$k=$(jq -er ".$k" release/grid.json)" >> "$GITHUB_OUTPUT"
+        done
+
+    - name: Cache the grid tar
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/canopi-climate-grid
+        key: canopi-climate-grid-${{ steps.pin.outputs.sha256 }}
+
+    - name: Download the grid tar
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ steps.pin.outputs.tag }}
+        ASSET: ${{ steps.pin.outputs.asset }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.cache/canopi-climate-grid
+        gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" \
+          --dir ~/.cache/canopi-climate-grid --clobber
+
+    - name: Check and extract the grid
+      shell: bash
+      env:
+        ASSET: ${{ steps.pin.outputs.asset }}
+        SHA256: ${{ steps.pin.outputs.sha256 }}
+        MANIFEST_SHA256: ${{ steps.pin.outputs.manifest_sha256 }}
+      run: |
+        set -euo pipefail
+        tar_path=~/.cache/canopi-climate-grid/"$ASSET"
+        got=$(sha256sum "$tar_path" | cut -d' ' -f1)
+        if [ "$got" != "$SHA256" ]; then
+          echo "::error::$ASSET has SHA-256 $got, release/grid.json pins $SHA256"
+          rm -f "$tar_path"
+          exit 1
+        fi
+        mkdir -p "$RUNNER_TEMP/grid"
+        tar -xf "$tar_path" -C "$RUNNER_TEMP/grid"
+        got=$(sha256sum "$RUNNER_TEMP/grid/manifest.json" | cut -d' ' -f1)
+        if [ "$got" != "$MANIFEST_SHA256" ]; then
+          echo "::error::manifest.json has SHA-256 $got, release/grid.json pins $MANIFEST_SHA256"
+          exit 1
+        fi
+        echo "CANOPI_CLIMATE_GRID=$RUNNER_TEMP/grid" >> "$GITHUB_ENV"

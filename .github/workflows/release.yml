@@ -1,0 +1,78 @@
+name: Release
+
+# The release tier: on a version tag, or by hand for an existing release (re-runs are safe: every upload
+# uses --clobber). It runs the grid tests against the grid pinned in release/grid.json, regenerates the
+# lookup vectors and fails if vectors/lookup.json is stale, writes a size report, and attaches
+# lookup.json, its SHA-256 and the size report to the GitHub release. It never builds or uploads a grid:
+# a release that keeps the grid (0.2.1) names the pinned grid release in its size report. Create the
+# GitHub release (gh release create <tag>) before the job uploads to it.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the vectors to (e.g. v0.2.1)
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vectors:
+    name: grid tests, vectors and size report
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/grid
+      - name: Tag matches the crate version
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 | jq -er '.packages[0].version')
+          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG, Cargo.toml version $version"; exit 1; }
+      - run: cargo test --release --features pipeline -- --ignored
+      - run: cargo build --release --features pipeline
+      - name: Regenerate the vectors (fail if the committed file is stale)
+        run: |
+          set -euo pipefail
+          B=target/release/canopi-climate
+          $B vectors --grid "$CANOPI_CLIMATE_GRID" --points vectors/points.csv --check vectors/lookup.json
+          mkdir -p dist
+          $B vectors --grid "$CANOPI_CLIMATE_GRID" --points vectors/points.csv -o dist/lookup.json
+          (cd dist && sha256sum lookup.json > lookup.json.sha256)
+      - name: Size report
+        run: |
+          set -euo pipefail
+          jq -n --slurpfile pin release/grid.json --slurpfile m "$CANOPI_CLIMATE_GRID/manifest.json" \
+            --arg tag "$TAG" --arg vectors "$(cut -d' ' -f1 dist/lookup.json.sha256)" \
+            --argjson vbytes "$(stat -c %s dist/lookup.json)" '
+            def sizes(t): (t | map(.bytes) | sort) as $s
+              | {tiles: ($s | length), total_bytes: ($s | add), median_bytes: $s[($s | length / 2 | floor)], max_bytes: $s[-1]};
+            {crate_release: $tag,
+             grid: {tag: $pin[0].tag, asset: $pin[0].asset, sha256: $pin[0].sha256, bytes: $pin[0].bytes,
+                    manifest_sha256: $pin[0].manifest_sha256, builder_version: $m[0].builder_version},
+             climate: sizes($m[0].tiles),
+             layers: ($m[0].layers | map({key: .id, value: sizes(.tiles)}) | from_entries),
+             vectors: {asset: "lookup.json", sha256: $vectors, bytes: $vbytes}}' > dist/size-report.json
+          cat dist/size-report.json
+          { echo '### Size report'; echo '```json'; cat dist/size-report.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Attach to the release
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" > /dev/null || { echo "::error::no GitHub release $TAG: gh release create $TAG first"; exit 1; }
+          gh release upload "$TAG" dist/lookup.json dist/lookup.json.sha256 dist/size-report.json --clobber
