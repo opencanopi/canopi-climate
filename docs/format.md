@@ -40,14 +40,16 @@ entries also have `complete_cells`. A reader that fetches tiles SHOULD check `by
 
 Every tile, climate or layer, is a Cloud Optimized GeoTIFF with exactly this layout. A reader MUST
 refuse a file that breaks any rule (`TileError::Layout`, or `TileError::Tiff` when the bytes are not a
-readable TIFF), and a writer MUST NOT produce one:
+readable TIFF or reach past the end of the file), and a writer MUST NOT produce one:
 
 | Rule | Value |
 |---|---|
 | Byte order and variant | Little-endian classic TIFF (`II*\0`). Big-endian (`MM`) and BigTIFF (`II+\0`) are refused. |
 | Images | Exactly one IFD (no overviews, no masks). |
 | Size | `side × side` pixels: 100 for climate tiles, 200 for layer tiles. |
-| Samples | `SamplesPerPixel` = the band count; `BitsPerSample` 16 for every sample; `SampleFormat` 2 (signed integer). |
+| Samples | `SamplesPerPixel` present (no default) and = the band count; `BitsPerSample` 16 for every sample; `SampleFormat` present and 2 (signed integer) for every sample, given once or per band. |
+| Bounds | The IFD, the values of every IFD entry (whatever its tag) and the tile data lie inside the file; anything past the end is `TileError::Tiff`. An entry of unknown field type counts one byte per value. |
+| Field types | `ImageWidth`, `ImageLength`, `BitsPerSample`, `Compression`, `SamplesPerPixel`, `PlanarConfiguration`, `Predictor`, `TileWidth`, `TileLength`, `TileOffsets`, `TileByteCounts` and `SampleFormat` are SHORT or LONG; `ModelPixelScale` and `ModelTiepoint` are DOUBLE. Other entries may have any type. |
 | Interleave | `PlanarConfiguration` absent or 1 (pixel-interleaved). |
 | Compression | `Compression` 8 or 32946 (Deflate). |
 | Predictor | `Predictor` absent or 1 (none). |
@@ -55,8 +57,12 @@ readable TIFF), and a writer MUST NOT produce one:
 | No data | −32768 (`NODATA`). |
 
 `wbgeotiff`'s `CogWriter` writes the tiles; the `tiff` crate reads them, natively and in WebAssembly.
-The committed fixture `tests/fixtures/synthetic-n50e000.tif` pins the layout, and the test
-`refuses_what_the_website_reader_refuses` (`src/tile.rs`) covers each refusal.
+The committed fixture `tests/fixtures/synthetic-n50e000.tif` pins the layout, and the tests
+`refuses_what_the_website_reader_refuses`, `refuses_what_the_website_reader_refuses_in_the_ifd` and
+`accepts_a_per_band_sample_format` (`src/tile.rs`) cover each rule. The crate refuses everything the
+website's reader (`tiff.ts` `readTileHeader`) refuses; it is stricter in two places, so a file both
+accept is always a valid tile: it requires every `SampleFormat` value to be 2 (the site reads the
+first), and it refuses SHORT or LONG georeferencing (the site also reads them as numbers).
 
 ## Georeferencing and grid
 
@@ -212,7 +218,7 @@ names.
 
 | Kind | When | Reader behaviour |
 |---|---|---|
-| `TileError::Tiff` | The bytes are not a readable TIFF. | Refuse the tile. |
+| `TileError::Tiff` | The bytes are not a readable TIFF, or the IFD, an entry's values or the tile data lie past the end of the file. | Refuse the tile. |
 | `TileError::Layout` | A [Container](#container) rule is broken, or the band count or sample type is wrong. | Refuse the tile. |
 | `TileError::Georef` | Missing or short `ModelPixelScale`/`ModelTiepoint`, wrong pixel size, or an origin that is not a tile corner. | Refuse the tile. |
 | `LookupError::InvalidCoordinate` | Non-finite coordinate or latitude outside [−90, 90]. | No lookup. |

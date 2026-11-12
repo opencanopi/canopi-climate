@@ -137,6 +137,7 @@ pub(crate) fn decode_raster(
                 "not a classic TIFF (BigTIFF is not read)".into(),
             ));
         }
+        Some(b"II*\0") => check_ifd(bytes)?,
         _ => {}
     }
     let mut d = Decoder::new(Cursor::new(bytes))?;
@@ -146,7 +147,7 @@ pub(crate) fn decode_raster(
             "{w}x{h}, expected {side}x{side}"
         )));
     }
-    check_layout(&mut d, side, bands)?;
+    check_layout(&mut d, side, bands, bytes.len())?;
     let id = georef_tile(&mut d, cell_deg)?;
     let data = match d.read_image()? {
         DecodingResult::I16(v) => v,
@@ -162,14 +163,77 @@ pub(crate) fn decode_raster(
     Ok((id, data))
 }
 
+/// Header fields the website's reader reads, each SHORT (3) or LONG (4).
+const INTEGER_TAGS: [u16; 12] = [256, 257, 258, 259, 277, 284, 317, 322, 323, 324, 325, 339];
+/// `ModelPixelScale` and `ModelTiepoint`, each DOUBLE (12).
+const GEOREF_TAGS: [u16; 2] = [33550, 33922];
+
+/// The first IFD of a little-endian classic TIFF, read raw before the `tiff`
+/// crate parses it, for the rules of the website's reader (`tiff.ts`
+/// `fields`, `numbers`, `readTileHeader`) that the crate does not apply:
+/// every entry's values inside the file ([`TileError::Tiff`]), the header
+/// fields above with their types, and `SamplesPerPixel` present
+/// ([`TileError::Layout`]).
+fn check_ifd(bytes: &[u8]) -> Result<(), TileError> {
+    let past = |m: String| TileError::Tiff(format!("{m} lies past the end of the file"));
+    let u16_at = |at: usize| -> Option<u16> {
+        Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+    };
+    let ifd = u32_at(4).ok_or_else(|| past("the header".into()))? as usize;
+    let n = usize::from(u16_at(ifd).ok_or_else(|| past("the IFD".into()))?);
+    if ifd + 2 + 12 * n + 4 > bytes.len() {
+        return Err(past("the IFD".into()));
+    }
+    let mut samples_per_pixel = false;
+    for e in (0..n).map(|i| ifd + 2 + 12 * i) {
+        let (tag, ty) = (u16_at(e).unwrap_or(0), u16_at(e + 2).unwrap_or(0));
+        let count = u64::from(u32_at(e + 4).unwrap_or(0));
+        // Value sizes of TIFF 6.0 and BigTIFF; an unknown type counts as one
+        // byte per value, as in the website's reader.
+        let width: u64 = match ty {
+            3 | 8 => 2,
+            4 | 9 | 11 | 13 => 4,
+            5 | 10 | 12 | 16..=18 => 8,
+            _ => 1,
+        };
+        let size = width * count;
+        let at = if size <= 4 {
+            (e + 8) as u64
+        } else {
+            u64::from(u32_at(e + 8).unwrap_or(0))
+        };
+        if at + size > bytes.len() as u64 {
+            return Err(past(format!("tag {tag}")));
+        }
+        let typed = if INTEGER_TAGS.contains(&tag) {
+            matches!(ty, 3 | 4)
+        } else {
+            !GEOREF_TAGS.contains(&tag) || ty == 12
+        };
+        if !typed {
+            return Err(TileError::Layout(format!("tag {tag} has field type {ty}")));
+        }
+        samples_per_pixel |= tag == 277;
+    }
+    if !samples_per_pixel {
+        return Err(TileError::Layout("SamplesPerPixel is missing".into()));
+    }
+    Ok(())
+}
+
 /// The header rules of the website's reader (`tiff.ts` `readTileHeader`),
-/// beyond what the `tiff` crate already refuses: one image, `bands` signed
-/// 16-bit samples per cell, pixel-interleaved, Deflate without predictor,
-/// one internal tile covering the image (docs/format.md, Container).
+/// beyond what the `tiff` crate and [`check_ifd`] already refuse: one image,
+/// `bands` signed 16-bit samples per cell, pixel-interleaved, Deflate
+/// without predictor, one internal tile covering the image and inside the
+/// file (docs/format.md, Container).
 fn check_layout<R: std::io::Read + std::io::Seek>(
     d: &mut Decoder<R>,
     side: usize,
     bands: usize,
+    file_len: usize,
 ) -> Result<(), TileError> {
     let layout = |m: String| Err(TileError::Layout(m));
     if d.more_images() {
@@ -178,7 +242,9 @@ fn check_layout<R: std::io::Read + std::io::Seek>(
     let short = |d: &mut Decoder<R>, tag: Tag| -> Result<Option<u64>, TileError> {
         Ok(d.find_tag_unsigned::<u64>(tag)?)
     };
-    let samples = short(d, Tag::SamplesPerPixel)?.unwrap_or(1);
+    let Some(samples) = short(d, Tag::SamplesPerPixel)? else {
+        return layout("SamplesPerPixel is missing".into());
+    };
     if samples != bands as u64 {
         return layout(format!("{samples} bands, expected {bands}"));
     }
@@ -186,7 +252,8 @@ fn check_layout<R: std::io::Read + std::io::Seek>(
     if bits.is_none_or(|b| b.iter().any(|&x| x != 16)) {
         return layout("samples are not 16-bit".into());
     }
-    if short(d, Tag::SampleFormat)? != Some(2) {
+    let format = d.find_tag_unsigned_vec::<u64>(Tag::SampleFormat)?;
+    if format.is_none_or(|f| f.is_empty() || f.iter().any(|&x| x != 2)) {
         return layout("samples are not signed integers".into());
     }
     let compression = short(d, Tag::Compression)?;
@@ -203,13 +270,21 @@ fn check_layout<R: std::io::Read + std::io::Seek>(
     let tl = short(d, Tag::TileLength)?.unwrap_or(0);
     let offsets = d
         .find_tag_unsigned_vec::<u64>(Tag::TileOffsets)?
-        .map_or(0, |v| v.len());
+        .unwrap_or_default();
     let counts = d
         .find_tag_unsigned_vec::<u64>(Tag::TileByteCounts)?
-        .map_or(0, |v| v.len());
+        .unwrap_or_default();
     let side = side as u64;
-    if tw < side || tl < side || offsets != 1 || counts != 1 {
+    let ([offset], [count]) = (offsets.as_slice(), counts.as_slice()) else {
         return layout("not one internal tile covering the image".into());
+    };
+    if tw < side || tl < side {
+        return layout("not one internal tile covering the image".into());
+    }
+    if offset.saturating_add(*count) > file_len as u64 {
+        return Err(TileError::Tiff(
+            "the tile data lies past the end of the file".into(),
+        ));
     }
     Ok(())
 }
@@ -332,17 +407,38 @@ mod tests {
     /// care either way).
     fn patched(tag: u16, new_tag: u16, value: u16) -> Vec<u8> {
         let mut b = FIXTURE.to_vec();
-        let u16_at = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
+        set_entry(&mut b, tag, new_tag, 3, 1, u32::from(value));
+        b
+    }
+
+    /// The byte offset of IFD entry `tag` in `b`.
+    fn entry_of(b: &[u8], tag: u16) -> usize {
+        let u16_at = |at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
         let ifd = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
-        let n = usize::from(u16_at(&b, ifd));
-        let entry = (0..n)
+        (0..usize::from(u16_at(ifd)))
             .map(|i| ifd + 2 + 12 * i)
-            .find(|&e| u16_at(&b, e) == tag)
-            .unwrap();
-        b[entry..entry + 2].copy_from_slice(&new_tag.to_le_bytes());
-        b[entry + 2..entry + 4].copy_from_slice(&3u16.to_le_bytes());
-        b[entry + 4..entry + 8].copy_from_slice(&1u32.to_le_bytes());
-        b[entry + 8..entry + 12].copy_from_slice(&u32::from(value).to_le_bytes());
+            .find(|&e| u16_at(e) == tag)
+            .unwrap()
+    }
+
+    /// Rewrite IFD entry `tag` as `new_tag` of field type `ty` with `count`
+    /// values and value-or-offset word `word`.
+    fn set_entry(b: &mut [u8], tag: u16, new_tag: u16, ty: u16, count: u32, word: u32) {
+        let e = entry_of(b, tag);
+        b[e..e + 2].copy_from_slice(&new_tag.to_le_bytes());
+        b[e + 2..e + 4].copy_from_slice(&ty.to_le_bytes());
+        b[e + 4..e + 8].copy_from_slice(&count.to_le_bytes());
+        b[e + 8..e + 12].copy_from_slice(&word.to_le_bytes());
+    }
+
+    /// The fixture with `tag` holding the SHORT list `values`, appended to
+    /// the end of the file (as GDAL writes per-band fields).
+    fn with_short_list(tag: u16, values: &[u16]) -> Vec<u8> {
+        let mut b = FIXTURE.to_vec();
+        b.resize(b.len().next_multiple_of(2), 0);
+        let at = b.len() as u32;
+        b.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+        set_entry(&mut b, tag, tag, 3, values.len() as u32, at);
         b
     }
 
@@ -395,6 +491,61 @@ mod tests {
         // Internal tile smaller than the image: refused, whichever layer
         // (the tiff crate or the check) sees it first.
         assert!(Tile::decode(&patched(322, 322, 56)).is_err());
+    }
+
+    /// `SampleFormat` given per band, as GDAL writes it, like
+    /// `BitsPerSample`: accepted when every value is 2.
+    #[test]
+    fn accepts_a_per_band_sample_format() {
+        let t = Tile::decode(&with_short_list(339, &[2; BANDS])).unwrap();
+        assert_eq!(t, synthetic::tile(TileId::parse("n50e000").unwrap()));
+        let mut mixed = [2; BANDS];
+        mixed[BANDS - 1] = 1;
+        // Refused whichever layer (the tiff crate or the check) sees it first.
+        assert!(Tile::decode(&with_short_list(339, &mixed)).is_err());
+        assert!(Tile::decode(&with_short_list(339, &[])).is_err());
+    }
+
+    /// The rest of `readTileHeader`'s refusals: a missing `SamplesPerPixel`
+    /// (no default), a header field it reads with a type other than SHORT or
+    /// LONG (DOUBLE for the georeferencing), and tag values or tile data
+    /// past the end of the file.
+    #[test]
+    fn refuses_what_the_website_reader_refuses_in_the_ifd() {
+        // SamplesPerPixel (277) renamed to an unknown private tag.
+        layout_error(&patched(277, 65000, BANDS as u16), "SamplesPerPixel");
+        let typed = |tag: u16, new_tag: u16, ty: u16, word: u32| {
+            let mut b = FIXTURE.to_vec();
+            set_entry(&mut b, tag, new_tag, ty, 1, word);
+            b
+        };
+        layout_error(&typed(259, 259, 1, 8), "field type");
+        layout_error(&typed(284, 317, 1, 1), "field type");
+        layout_error(&typed(339, 339, 1, 2), "field type");
+        layout_error(&typed(277, 277, 1, BANDS as u32), "field type");
+        layout_error(&typed(259, 259, 8, 8), "field type");
+        // A tag the decoder never reads (GDAL_NODATA, 42113, ASCII, 7 bytes
+        // out of line) pointing past the end of the file.
+        let past = |tag: u16, back: usize| {
+            let mut b = FIXTURE.to_vec();
+            let e = entry_of(&b, tag);
+            let word = (b.len() - back) as u32;
+            b[e + 8..e + 12].copy_from_slice(&word.to_le_bytes());
+            b
+        };
+        match Tile::decode(&past(42113, 3)) {
+            Err(TileError::Tiff(m)) => assert!(m.contains("past the end"), "{m}"),
+            other => panic!("expected a TIFF error, got {other:?}"),
+        }
+        assert!(
+            Tile::decode(&past(42113, 7)).is_ok(),
+            "ends at the last byte"
+        );
+        // Tile data past the end of the file.
+        let mut long = FIXTURE.to_vec();
+        let len = long.len() as u32;
+        set_entry(&mut long, 325, 325, 4, 1, len);
+        assert!(Tile::decode(&long).is_err());
     }
 
     #[test]
