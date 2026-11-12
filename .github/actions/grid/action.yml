@@ -2,7 +2,8 @@ name: Pinned grid
 description: >-
   The grid release named in release/grid.json, extracted to $RUNNER_TEMP/grid and exported as
   CANOPI_CLIMATE_GRID: restored from the Actions cache keyed by its SHA-256, else downloaded from the
-  release with gh. A download whose SHA-256 differs from the pin fails, naming both.
+  release in this repository with gh, else (a fork without that release) from the pinned url. A
+  download whose SHA-256 differs from the pin fails, naming both.
 
 runs:
   using: composite
@@ -12,7 +13,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        for k in tag asset sha256 manifest_sha256; do
+        for k in tag asset url sha256 manifest_sha256; do
           echo "$k=$(jq -er ".$k" release/grid.json)" >> "$GITHUB_OUTPUT"
         done
 
@@ -30,11 +31,16 @@ runs:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ steps.pin.outputs.tag }}
         ASSET: ${{ steps.pin.outputs.asset }}
+        URL: ${{ steps.pin.outputs.url }}
       run: |
         set -euo pipefail
-        mkdir -p ~/.cache/canopi-climate-grid
-        gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" \
-          --dir ~/.cache/canopi-climate-grid --clobber
+        dir=~/.cache/canopi-climate-grid
+        mkdir -p "$dir"
+        if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" \
+            --dir "$dir" --clobber; then
+          echo "::notice::$ASSET is not in $GITHUB_REPOSITORY release $TAG; downloading the pinned url $URL"
+          curl --fail --location --silent --show-error --retry 3 -o "$dir/$ASSET" "$URL"
+        fi
 
     - name: Check and extract the grid
       shell: bash

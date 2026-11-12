@@ -297,7 +297,14 @@ CI tiers:
 | `ci.yml` | every push and pull request | fmt, clippy (pipeline, wasm), tests, cargo-deny, wasm build and smoke |
 | `ci.yml` grid job | every push to main, by hand | the `#[ignore]` tests, `verify-grid` and the `vectors/lookup.json` check, on the grid pinned in `release/grid.json` (cached by SHA-256) |
 | `advisories.yml` | push to main, weekly, by hand | osv-scanner over `Cargo.lock`, exceptions in `osv-scanner.toml` |
-| `release.yml` | a `v*` tag, by hand | grid tests, vectors regenerated and checked, size report; uploads `lookup.json` to the release (`--clobber`, safe to re-run) |
+| `release.yml` | a `v*` tag, by hand | grid tests, vectors regenerated and checked, size report (read-only token); a separate job uploads `lookup.json`, its SHA-256 and the size report to the release (the only write token; `--clobber`, safe to re-run) |
+
+To release, bump `version` in `Cargo.toml`, merge to main, then create the release with
+`gh release create vX.Y.Z --target main`: it creates the tag and the release together, and the tag
+push starts `release.yml` with the release already there. Pushing a tag first starts the run before
+the release exists and its upload job fails; then create the release and run `release.yml` by hand
+with `tag=vX.Y.Z`. The grid job downloads the pinned grid from this repository's release, or from
+the `url` in `release/grid.json` when this repository does not have it (a fork).
 
 Dependency updates come from Renovate (`renovate.json`) once its GitHub app is installed.
 

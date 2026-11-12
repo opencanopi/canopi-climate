@@ -4,8 +4,15 @@ name: Release
 # uses --clobber). It runs the grid tests against the grid pinned in release/grid.json, regenerates the
 # lookup vectors and fails if vectors/lookup.json is stale, writes a size report, and attaches
 # lookup.json, its SHA-256 and the size report to the GitHub release. It never builds or uploads a grid:
-# a release that keeps the grid (0.2.1) names the pinned grid release in its size report. Create the
-# GitHub release (gh release create <tag>) before the job uploads to it.
+# a release that keeps the grid (0.2.1) names the pinned grid release in its size report.
+#
+# Safe order: `gh release create vX.Y.Z` creates the release and its tag together, and the tag push
+# starts this workflow with the release already there. Pushing the tag first starts the run before the
+# release exists, and the attach job fails; create the release, then run this workflow by hand with
+# tag=vX.Y.Z.
+#
+# Least privilege: the token is read-only everywhere except the attach job, which checks nothing out,
+# runs no build or test, and only uploads the files the build job left as an artifact.
 on:
   push:
     tags: ['v*']
@@ -20,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -32,11 +39,11 @@ jobs:
     timeout-minutes: 20
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/grid
@@ -71,8 +78,38 @@ jobs:
              vectors: {asset: "lookup.json", sha256: $vectors, bytes: $vbytes}}' > dist/size-report.json
           cat dist/size-report.json
           { echo '### Size report'; echo '```json'; cat dist/size-report.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/lookup.json
+            dist/lookup.json.sha256
+            dist/size-report.json
+          if-no-files-found: error
+          retention-days: 7
+
+  attach:
+    name: attach to the release
+    needs: vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
       - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release view "$TAG" > /dev/null || { echo "::error::no GitHub release $TAG: gh release create $TAG first"; exit 1; }
-          gh release upload "$TAG" dist/lookup.json dist/lookup.json.sha256 dist/size-report.json --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null || {
+            echo "::error::no GitHub release $TAG. Create it with: gh release create $TAG (this also creates the tag), then run this workflow by hand with tag=$TAG"
+            exit 1
+          }
+          gh release upload "$TAG" dist/lookup.json dist/lookup.json.sha256 dist/size-report.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
