@@ -224,9 +224,12 @@ polygon's interior point) holds VA.
   and the set of misses to equal the one documented here:
 
 ```sh
-CANOPI_CLIMATE_GRID=/media/daylon/main_hdd/canopi-cache/climate/out-v0.2 \
+CANOPI_CLIMATE_GRID=/path/to/extracted/canopi-climate-grid-v0.2.0 \
   cargo test --release --features pipeline --test validation -- --ignored
 ```
+
+  CI's `grid` job runs every ignored test on each push to `main`, against
+  the release tar pinned in `release/grid.json`.
 
 - `tests/site_layers.rs` (ignored) checks the soil and regions points
   above, the empty ice sheets, the coastal points and the release

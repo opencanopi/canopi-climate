@@ -135,10 +135,19 @@ impl Variable {
         }
     }
 
-    /// Band-order index of this variable.
+    /// Band-order index of this variable (its position in [`VARIABLES`]).
     #[must_use]
-    pub fn index(self) -> usize {
-        VARIABLES.iter().position(|v| *v == self).unwrap_or(0)
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Koppen => 0,
+            Self::TminCold => 1,
+            Self::TmaxWarm => 2,
+            Self::TmeanCold => 3,
+            Self::TmeanWarm => 4,
+            Self::Precip => 5,
+            Self::Aridity => 6,
+            Self::DryMonths => 7,
+        }
     }
 
     /// Encode a value; non-finite values become [`NODATA`], others are

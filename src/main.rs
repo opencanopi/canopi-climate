@@ -11,8 +11,6 @@ use canopi_climate::pipeline::sample::{Grid, sample_csv};
 use canopi_climate::pipeline::{PipelineError, Result, sources};
 use clap::{Parser, Subcommand};
 
-const DEFAULT_SOURCES: &str = "/media/daylon/main_hdd/canopi-cache/climate";
-
 #[derive(Parser)]
 #[command(
     name = "canopi-climate",
@@ -28,8 +26,9 @@ struct Cli {
 enum Command {
     /// Build the grid from the pinned sources, stage by stage.
     BuildGrid {
-        /// Directory holding the source files (`canopi-climate sources`).
-        #[arg(long, env = "CANOPI_CLIMATE_SOURCES", default_value = DEFAULT_SOURCES)]
+        /// Directory holding the source files (`canopi-climate sources`);
+        /// required, from the flag or the environment variable.
+        #[arg(long, env = "CANOPI_CLIMATE_SOURCES")]
         sources: PathBuf,
         /// Release directory (tiles, manifest).
         #[arg(long)]
@@ -234,4 +233,39 @@ fn sample(points: &Path, grid: &Path, output: Option<&Path>, radius: usize) -> R
         s.points, s.ok, s.no_data, s.invalid
     );
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn build_grid_needs_sources() {
+        let parsed = Cli::try_parse_from(["canopi-climate", "build-grid", "--out", "o"]);
+        if std::env::var_os("CANOPI_CLIMATE_SOURCES").is_some() {
+            assert!(parsed.is_ok(), "the environment variable stands in");
+            return;
+        }
+        let Err(e) = parsed else {
+            panic!("build-grid without --sources must be refused");
+        };
+        let text = e.to_string();
+        assert!(text.contains("--sources"), "{text}");
+        let help = Cli::try_parse_from(["canopi-climate", "build-grid", "--help"])
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(help.contains("CANOPI_CLIMATE_SOURCES"), "{help}");
+        assert!(!help.contains("/media/"), "no default path: {help}");
+        let ok = Cli::try_parse_from([
+            "canopi-climate",
+            "build-grid",
+            "--sources",
+            "s",
+            "--out",
+            "o",
+        ]);
+        assert!(ok.is_ok());
+    }
 }

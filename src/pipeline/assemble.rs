@@ -144,15 +144,22 @@ struct SlotStats {
     tmin_clamped_outside_e: u64,
     tmax_clamped_outside_e: u64,
     class_missing: u64,
+    /// A stored class code that is not NODATA and not 1-30 (lookups would
+    /// print an empty symbol).
+    class_unknown: u64,
 }
 
 impl SlotStats {
     fn add(&mut self, v: &[i16; 8], clamped: Clamped, of_means: f32) {
         self.land += 1;
         let d = |var: Variable| var.decode(v[var.index()]).map(|x| x as f32);
+        if v[0] == NODATA {
+            self.class_missing += 1;
+            return;
+        }
         let code = u8::try_from(v[0]).ok().filter(|c| (1..=30).contains(c));
         let Some(code) = code else {
-            self.class_missing += 1;
+            self.class_unknown += 1;
             return;
         };
         if let (Some(tc), Some(tw)) = (d(Variable::TmeanCold), d(Variable::TmeanWarm)) {
@@ -185,6 +192,7 @@ impl SlotStats {
         json!({
             "land_cells": self.land,
             "cells_without_class": self.class_missing,
+            "cells_with_unknown_class_code": self.class_unknown,
             "class_vs_own_temperatures": {
                 "cells": self.with_class_and_temps,
                 "margin_gt_0c": self.margin_gt0,
@@ -265,6 +273,7 @@ fn fill_slot(
         total.tmin_clamped_outside_e += p.tmin_clamped_outside_e;
         total.tmax_clamped_outside_e += p.tmax_clamped_outside_e;
         total.class_missing += p.class_missing;
+        total.class_unknown += p.class_unknown;
     }
     total
 }
@@ -566,6 +575,24 @@ fn notes() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_stats_count_unknown_koppen_codes_apart_from_missing_classes() {
+        let mut st = SlotStats::default();
+        let cell = |code: i16| {
+            let mut v = [100i16; 8];
+            v[0] = code;
+            v
+        };
+        for code in [15, NODATA, 0, 31, -2] {
+            st.add(&cell(code), Clamped::default(), f32::NAN);
+        }
+        let j = st.json();
+        assert_eq!(j["land_cells"], 5);
+        assert_eq!(j["cells_without_class"], 1);
+        assert_eq!(j["cells_with_unknown_class_code"], 3);
+        assert_eq!(j["class_vs_own_temperatures"]["cells"], 1);
+    }
 
     #[test]
     fn built_at_formats_utc() {
