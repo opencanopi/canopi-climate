@@ -1,0 +1,70 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency updates, adapted from the Canopi app's renovate.json (read at 0c425fb07), trimmed to Cargo and GitHub Actions. Weekly, grouped minor and patch per ecosystem; each major its own PR; exact pins wait on the dashboard; security updates at once. Inert until the Renovate GitHub app is installed on opencanopi/canopi-climate (owner action).",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Paris",
+  "schedule": ["* 0-5 * * 1"],
+  "minimumReleaseAge": "14 days",
+  "internalChecksFilter": "strict",
+  "dependencyDashboard": true,
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null,
+    "dependencyDashboardApproval": false,
+    "labels": ["security"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["* 0-5 * * 1"]
+  },
+  "enabledManagers": ["cargo", "github-actions", "custom.regex"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The wasm-bindgen CLI that CI installs (`tool: wasm-bindgen-cli@x.y.z`) must equal the wasm-bindgen crate pinned in Cargo.toml; grouped with it below.",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["tool: wasm-bindgen-cli@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "wasm-bindgen-cli",
+      "datasourceTemplate": "crate"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Minor and patch, one group per ecosystem.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "Rust crates minor and patch"
+    },
+    {
+      "description": "Minor and patch, one group per ecosystem.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "GitHub Actions minor and patch"
+    },
+    {
+      "description": "Exact pins (Cargo =x.y.z: tiff, proj4rs, wasm-bindgen) wait on the dependency dashboard until the owner ticks them, each its own PR, since one pin in a group would hold the whole group; vulnerabilityAlerts still opens security updates at once.",
+      "matchManagers": ["cargo"],
+      "matchCurrentValue": "/^=/",
+      "groupName": null,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The wasm-bindgen crate and its CLI move together: wasm-bindgen refuses a CLI of another version.",
+      "matchPackageNames": ["wasm-bindgen", "wasm-bindgen-cli"],
+      "groupName": "wasm-bindgen",
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The Rust toolchain moves by hand with rust-toolchain.toml.",
+      "matchManagers": ["rust-toolchain", "github-actions"],
+      "matchDepNames": ["rust", "dtolnay/rust-toolchain"],
+      "enabled": false
+    },
+    {
+      "description": "Matched by dependency name, since a git dependency's package name is its URL. The whitebox crates (wbgeotiff, wbhdf, the whitebox-wasm repository) come from one revision and move only with the code that measures them: moving one alone would split the revisions.",
+      "matchDepNames": ["wbgeotiff", "wbhdf", "whitebox-wasm"],
+      "enabled": false
+    }
+  ]
+}

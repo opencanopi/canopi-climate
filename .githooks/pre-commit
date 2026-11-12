@@ -1,0 +1,10 @@
+#!/bin/sh
+# Tracked git hook (enable once per checkout: git config core.hooksPath .githooks).
+# Formatting only (about 0.3 s). Cargo runs in a memory-capped scope when systemd-run exists: on the
+# maintainer's machine one out-of-memory kill stops the whole session.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+. .githooks/lib.sh
+capped cargo fmt --all --check || {
+  echo "pre-commit: cargo fmt --all --check failed; run cargo fmt --all" >&2
+  exit 1
+}

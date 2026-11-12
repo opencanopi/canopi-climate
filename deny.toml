@@ -1,0 +1,42 @@
+# cargo-deny 0.20 over the crate (bans, licences, sources), adapted from the Canopi app's deny.toml
+# (opencanopi/canopi, read at 0c425fb07). Advisories are not checked here: OSV is the one advisory scanner,
+# as in the app (.github/workflows/advisories.yml, osv-scanner.toml). CI: `cargo deny check bans licenses sources`.
+[graph]
+# Native (the pipeline and CLI) and the WebAssembly reader.
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+all-features = true
+
+[licenses]
+# canopi-climate is AGPL-3.0-or-later (LICENSE). Every allowed licence is one-way compatible into AGPLv3:
+# permissive licences and Unicode-3.0. An allowance no crate uses is a warning, so the list holds only what
+# the dependency tree uses (the app's list, trimmed; 2026-11-12). The crate is private (`publish = false`)
+# and ignored below.
+allow = [
+  "MIT", "Apache-2.0",
+  "BSD-2-Clause", "BSD-3-Clause",
+  "Zlib", "0BSD", "Unlicense",
+  "Unicode-3.0",
+]
+confidence-threshold = 0.9
+# IJG (FSF: free, GPL-compatible) only for the JPEG encoder wbgeotiff pulls in.
+exceptions = [{ crate = "jpeg-encoder", allow = ["IJG"] }]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+# The whitebox crates come from one git revision (Cargo.toml); a git dependency without a version
+# requirement counts as a wildcard, allowed only on this `publish = false` crate.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  { crate = "gdal", reason = "no-gdal: the pure-Rust whitebox crates replace GDAL (the app's ADR 0014; README Features)" },
+  { crate = "gdal-sys", reason = "no-gdal: the pure-Rust whitebox crates replace GDAL (the app's ADR 0014; README Features)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/opengeos/whitebox-wasm"]

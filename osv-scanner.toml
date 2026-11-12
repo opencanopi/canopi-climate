@@ -1,0 +1,8 @@
+# osv-scanner exceptions (the Canopi app's table format; .github/workflows/advisories.yml runs the scan).
+# Each entry names why the advisory does not apply and expires: when `ignoreUntil` passes, the scan fails
+# again and the entry is re-checked, renewed with a new reason, or removed.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0089"
+ignoreUntil = 2027-05-12T00:00:00Z
+reason = "atomic-polyfill (unmaintained) is only in Cargo.lock: geo-types lists rstar 0.9-0.11 (heapless 0.7) as optional features this crate never enables; `cargo tree --all-features --target all -i atomic-polyfill` prints nothing (2026-11-12). Re-check when geo moves."

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Tracked git hook (enable once per checkout: git config core.hooksPath .githooks).
+# Before a push: clippy over every target with the pipeline feature (it covers the default build), the
+# default tests, and the pipeline tests when the pushed commits touch src/pipeline/, src/main.rs, tests/,
+# Cargo.toml or Cargo.lock (about 4 s warm, 23 s with the pipeline tests). Deletions and tags are skipped.
+# Cargo runs memory-capped (.githooks/lib.sh). Bypass once with `git push --no-verify`.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+. .githooks/lib.sh
+
+zero=0000000000000000000000000000000000000000
+run=no
+pipeline=no
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_ref" in refs/tags/*) continue ;; esac
+  [ "$local_sha" = "$zero" ] && continue # deletion
+  run=yes
+  if [ "$remote_sha" = "$zero" ]; then
+    # A new branch: compare with the default branch when it is known, else check everything.
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || base=""
+  else
+    base=$remote_sha
+  fi
+  if [ -z "$base" ]; then
+    pipeline=yes
+  elif git diff --name-only "$base" "$local_sha" | grep -qE '^(src/pipeline/|src/main\.rs|tests/|Cargo\.(toml|lock)$)'; then
+    pipeline=yes
+  fi
+done
+[ "$run" = yes ] || exit 0
+
+capped cargo clippy -j "$JOBS" --all-targets --features pipeline -- -D warnings || exit 1
+capped cargo test -j "$JOBS" || exit 1
+if [ "$pipeline" = yes ]; then
+  capped cargo test -j "$JOBS" --features pipeline || exit 1
+fi

@@ -1,0 +1,54 @@
+name: Advisories
+
+# The one advisory scan (as in the Canopi app): a pinned osv-scanner over Cargo.lock, held to the exception
+# table osv-scanner.toml (each entry with a reason and an ignoreUntil date). On every push to main, on a pull
+# request changing its inputs, and weekly, since new advisories land in the database, not the repository.
+# A new advisory or an expired entry fails the run. cargo-deny checks bans, licences and sources in CI, not
+# advisories.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: [Cargo.lock, osv-scanner.toml, .github/workflows/advisories.yml]
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+# Every run has a group of its own, so it always finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  osv:
+    name: OSV advisories (Cargo.lock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned osv-scanner
+        env:
+          OSV_SCANNER_VERSION: 2.7.0
+          OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 1 --output "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+
+      - name: Scan Cargo.lock against osv-scanner.toml
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/osv-scanner" scan source --config osv-scanner.toml --lockfile Cargo.lock \
+            | tee "$RUNNER_TEMP/osv.txt"
+          {
+            echo '### OSV advisories'
+            echo '```'
+            tail -n 20 "$RUNNER_TEMP/osv.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
