@@ -12,6 +12,7 @@ use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
+use crate::vectors::{LayerTiles, Site};
 
 /// Decoded tiles kept in memory at most (about 1.4 MB each).
 const CACHE_TILES: usize = 96;
@@ -109,6 +110,15 @@ impl Grid {
     /// Invalid coordinate, unreadable tile.
     pub fn lookup(&mut self, lat: f64, lon: f64, radius: usize) -> Result<Option<Lookup>> {
         let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        self.load_climate(lat, lon, radius)?;
+        let cache = &self.cache;
+        lookup_across(|id| cache.get(&id), lat, lon, radius).map_err(bad)
+    }
+
+    /// Decode the climate tiles a search of `radius` cells around a point
+    /// can reach into the cache.
+    fn load_climate(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
         let ids = search_tiles(lat, lon, radius).map_err(bad)?;
         if self.cache.len() + ids.len() > CACHE_TILES {
             self.cache.clear();
@@ -116,8 +126,44 @@ impl Grid {
         for id in &ids {
             self.load(*id)?;
         }
-        let cache = &self.cache;
-        lookup_across(|id| cache.get(&id), lat, lon, radius).map_err(bad)
+        Ok(())
+    }
+
+    /// Climate (within `radius` cells), soil and regions at a point, as
+    /// `canopi-climate lookup` prints them ([`Site::json`]). With
+    /// `own_tile_only`, the answer of a reader given the point's own tiles
+    /// only (the WebAssembly exports).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn site(&mut self, lat: f64, lon: f64, radius: usize, own_tile_only: bool) -> Result<Site> {
+        self.load_climate(lat, lon, radius)?;
+        let r = LAYER_LOOKUP_RADIUS;
+        let (soil, regions) = (self.has_layer("soil"), self.has_layer("regions"));
+        if soil {
+            self.load_layer("soil", SOIL_BANDS, lat, lon, r)?;
+        }
+        if regions {
+            self.load_layer("regions", REGION_BANDS, lat, lon, r)?;
+        }
+        let (cache, layers) = (&self.cache, &self.layer_cache);
+        let climate_tiles = |id: TileId| cache.get(&id);
+        let soil_tiles = |id: TileId| layers.get(&("soil".to_string(), id));
+        let region_tiles = |id: TileId| layers.get(&("regions".to_string(), id));
+        crate::vectors::site(
+            &climate_tiles,
+            soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
+            regions.then_some(&region_tiles as LayerTiles<'_, '_>),
+            (lat, lon, radius),
+            own_tile_only,
+        )
+        .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
+    }
+
+    /// The grid directory.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Whether the grid has a site layer (`soil`, `regions`).

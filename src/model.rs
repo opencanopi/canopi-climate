@@ -163,19 +163,29 @@ impl Variable {
     /// nearest `f64`), which prints cleanly in JSON and JavaScript.
     #[must_use]
     pub fn decode(self, stored: i16) -> Option<f64> {
-        if stored == NODATA {
-            return None;
-        }
         let info = self.info();
-        let inverse = (1.0 / f64::from(info.scale)).round();
-        let q = f64::from(stored);
-        let v = if (inverse * f64::from(info.scale) - 1.0).abs() < 1e-6 {
-            q / inverse
-        } else {
-            q * f64::from(info.scale)
-        };
-        Some(v + f64::from(info.offset))
+        decode_value(stored, info.scale, info.offset)
     }
+}
+
+/// Decode a stored value at `scale` and `offset` (climate variables and
+/// layer bands alike); [`NODATA`] becomes `None`. A decimal scale (one
+/// whose inverse is an integer, e.g. 0.1, 0.01) divides by its inverse, so
+/// -123 at scale 0.1 is exactly -12.3 (the nearest `f64`), which prints
+/// cleanly in JSON and JavaScript; other scales multiply.
+#[must_use]
+pub fn decode_value(stored: i16, scale: f32, offset: f32) -> Option<f64> {
+    if stored == NODATA {
+        return None;
+    }
+    let inverse = (1.0 / f64::from(scale)).round();
+    let q = f64::from(stored);
+    let v = if (inverse * f64::from(scale) - 1.0).abs() < 1e-6 {
+        q / inverse
+    } else {
+        q * f64::from(scale)
+    };
+    Some(v + f64::from(offset))
 }
 
 /// `round((value - offset) / scale)` clamped to `-32767..=32767`.

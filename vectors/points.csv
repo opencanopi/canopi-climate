@@ -1,0 +1,55 @@
+name,lat,lon
+Lyon,45.76,4.84
+Seville,37.39,-5.98
+Manaus,-3.12,-60.02
+Nairobi,-1.29,36.82
+Oslo,59.91,10.75
+Montreal,45.5,-73.57
+Dakar,14.69,-17.44
+Lima,-12.05,-77.04
+Hanoi,21.03,105.85
+Perth,-31.95,115.86
+Phoenix,33.45,-112.07
+Yakutsk,62.03,129.73
+Paris,48.8566,2.3522
+Sao Paulo,-23.55,-46.63
+Cairo,30.04,31.24
+Mumbai,19.08,72.88
+Tokyo,35.68,139.69
+Reykjavik,64.15,-21.94
+Cape Town,-33.92,18.42
+Ushuaia,-54.8,-68.3
+Quito,-0.18,-78.47
+Alice Springs,-23.7,133.88
+Marseille coast,43.25,5.35
+"Suva, Fiji",-18.14,178.44
+"Taveuni, Fiji (west of 180)",-16.85,-179.97
+Fiji at 180,-16.75,180
+"Anadyr, Chukotka",64.73,177.51
+"Uelen, Chukotka",66.16,-169.81
+Wrangel east of 180,71.2,-179.95
+Wrangel west of 180,71.2,179.95
+Chukotka at -180,65.5,-180
+"South Pole, lon 180",-90,180
+"South Pole, lon 0",-90,0
+North Pole,90,0
+near the North Pole,89.99,-179.99
+corner 50 N 0 E,50,0
+corner 10 N 10 E,10,10
+corner 0 N 30 E,0,30
+corner 50 N 20 E,50,20
+corner 60 N 30 E,60,30
+corner 40 N 0 E (sea),40,0
+edge 45 N 9.999 E,45,9.999
+edge 45 N 10 E,45,10
+corner 20 N -10 E,20,-10
+Cap Corse coast,42.75,9.95
+Land's End coast,49.95,-5.55
+Normandy coast,49.45,-0.05
+Picardy coast,50.05,1.15
+Balearic coast,40.05,3.15
+Portugal coast (soil),40.025,-8.975
+Cornwall coast (soil),49.975,-5.075
+mid-Atlantic,30,-40
+latitude 91,91,0
+latitude -90.5,-90.5,10

@@ -4,11 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use canopi_climate::layer::LAYER_LOOKUP_RADIUS;
 use canopi_climate::lookup::DEFAULT_RADIUS;
 use canopi_climate::pipeline::build::{self, BuildConfig, Stage};
 use canopi_climate::pipeline::sample::{Grid, SampleOptions, sample_csv_with};
-use canopi_climate::pipeline::{PipelineError, Result, sources};
+use canopi_climate::pipeline::{PipelineError, Result, sources, vectors};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -94,6 +93,24 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_RADIUS)]
         radius: usize,
     },
+    /// Write the lookup vectors of a grid (`vectors/lookup.json`): each
+    /// named point's `lookup` JSON, whether a single-tile reader agrees,
+    /// and the rule tables (docs/format.md).
+    Vectors {
+        /// Grid directory.
+        #[arg(long)]
+        grid: PathBuf,
+        /// CSV of name,lat,lon.
+        #[arg(long)]
+        points: PathBuf,
+        /// Output file (default: standard output).
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Compare with this committed file instead of writing (the `cli`
+        /// field aside); exit 1 when it is stale.
+        #[arg(long, conflicts_with = "output")]
+        check: Option<PathBuf>,
+    },
     /// Check every tile of a grid against its manifest.
     VerifyGrid {
         /// Grid directory.
@@ -163,25 +180,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
             grid,
             radius,
         } => {
-            let mut g = Grid::open(&grid)?;
-            let climate = g.lookup(lat, lon, radius)?;
-            let soil = g.soil(lat, lon, LAYER_LOOKUP_RADIUS)?;
-            let regions = g.regions(lat, lon, LAYER_LOOKUP_RADIUS)?;
-            let found = climate.is_some()
-                || soil.is_some()
-                || regions
-                    .as_ref()
-                    .is_some_and(|r| r.wgsrpd_l3.is_some() || r.iso_a2.is_some());
-            let out = serde_json::json!({ "climate": climate, "soil": soil, "regions": regions });
-            let text = serde_json::to_string_pretty(&out)
+            let site = Grid::open(&grid)?.site(lat, lon, radius, false)?;
+            let text = serde_json::to_string_pretty(&site.json())
                 .map_err(|e| PipelineError::Data(e.to_string()))?;
             println!("{text}");
-            Ok(if found {
+            Ok(if site.found() {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(2)
             })
         }
+        Command::Vectors {
+            grid,
+            points,
+            output,
+            check,
+        } => vectors_cmd(&grid, &points, output.as_deref(), check.as_deref()),
         Command::VerifyGrid { grid } => {
             let g = Grid::open(&grid)?;
             let problems = g.verify()?;
@@ -202,6 +216,27 @@ fn run(cli: Cli) -> Result<ExitCode> {
             })
         }
     }
+}
+
+fn vectors_cmd(
+    grid: &Path,
+    points: &Path,
+    output: Option<&Path>,
+    check: Option<&Path>,
+) -> Result<ExitCode> {
+    let text = std::fs::read_to_string(points).map_err(|e| PipelineError::io(points, e))?;
+    let pts = vectors::read_points(&text)?;
+    let fresh = vectors::vectors(&mut Grid::open(grid)?, &pts, DEFAULT_RADIUS)?;
+    let Some(problem) = vectors::write_or_check(&fresh, output, check)? else {
+        return Ok(ExitCode::SUCCESS);
+    };
+    let committed = check.unwrap_or(Path::new("?")).display();
+    eprintln!(
+        "{committed} is stale ({problem}); regenerate: canopi-climate vectors --grid {} --points {} -o {committed}",
+        grid.display(),
+        points.display(),
+    );
+    Ok(ExitCode::FAILURE)
 }
 
 fn list_sources(verify: Option<PathBuf>) -> Result<ExitCode> {

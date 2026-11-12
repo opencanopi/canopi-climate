@@ -32,6 +32,8 @@ pub mod model;
 pub mod regions;
 pub mod soil;
 pub mod tile;
+#[cfg(any(test, feature = "pipeline"))]
+pub mod vectors;
 
 #[cfg(feature = "pipeline")]
 pub mod pipeline;

@@ -56,4 +56,30 @@ assert.equal(sea.iso_a2, null);
 assert.equal(cc.textureClass(40, 20), "loam");
 assert.equal(cc.textureClass(70, 40), undefined);
 
-console.log("wasm smoke ok", cc.version(), JSON.stringify(r.periods[0]), JSON.stringify(soil), JSON.stringify(fr));
+// The synthetic vectors (tests/fixtures/synthetic-expected.json, written by the crate's own
+// lookups): every point a single-tile reader can answer gives exactly the native answer. The
+// host fetches the point's own tile only (none outside n50e000 here).
+const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "tests", "fixtures", "synthetic-expected.json"), "utf8"));
+let compared = 0;
+for (const p of vectors.points) {
+  if (p.expect === "invalid") {
+    assert.equal(cc.tileName(p.lat, p.lon), undefined, p.name);
+    assert.throws(() => cc.lookup(bytes, p.lat, p.lon), p.name);
+    continue;
+  }
+  if (!p.own_tile) continue; // needs a neighbouring tile: the cross-tile readers only
+  const own = cc.tileName(p.lat, p.lon) === "n50e000.tif";
+  const got = {
+    climate: own ? cc.lookup(bytes, p.lat, p.lon) : null,
+    soil: own ? cc.lookupSoil(soilBytes, p.lat, p.lon) : null,
+    regions: own ? cc.lookupRegions(regionsBytes, p.lat, p.lon) : null,
+  };
+  assert.deepStrictEqual(got.climate, p.expect.climate, `${p.name}: climate`);
+  assert.deepStrictEqual(got.soil, p.expect.soil, `${p.name}: soil`);
+  if (own) assert.deepStrictEqual(got.regions, p.expect.regions, `${p.name}: regions`);
+  else assert.deepStrictEqual([p.expect.regions.wgsrpd_l3, p.expect.regions.iso_a2], [null, null], `${p.name}: regions`);
+  compared++;
+}
+assert.ok(compared >= 30, `${compared} vector points compared`);
+
+console.log(`wasm smoke ok: ${compared} vector points`, cc.version(), JSON.stringify(r.periods[0]), JSON.stringify(soil), JSON.stringify(fr));

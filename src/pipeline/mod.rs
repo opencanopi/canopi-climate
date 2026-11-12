@@ -19,6 +19,7 @@ pub mod sample;
 pub mod soil;
 pub mod sources;
 pub mod tiff_rows;
+pub mod vectors;
 
 use std::path::PathBuf;
 
