@@ -2,7 +2,7 @@
 //! and the `pipeline` feature):
 //!
 //! ```text
-//! CANOPI_CLIMATE_GRID=out-v0.2 cargo test --release --features pipeline --test site_layers -- --ignored
+//! CANOPI_CLIMATE_GRID=out-v0.3 cargo test --release --features pipeline --test site_layers -- --ignored
 //! ```
 //!
 //! Soil values are SoilGrids' own: the expected numbers are the

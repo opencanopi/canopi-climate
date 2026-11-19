@@ -123,10 +123,10 @@ build the median climate tile is 125 KB, extremes 52 KB, soil 45 KB and regions 
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.2          # JSON: climate, soil, regions, extremes
-canopi-climate sample points.csv --grid out-v0.2 -o climate.csv
-canopi-climate sample points.csv --grid out-v0.2 --regions    # + wgsrpd_l3, iso_a2 columns
-canopi-climate verify-grid out-v0.2                           # sizes, SHA-256, every tile decoded
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.3          # JSON: climate, soil, regions, extremes
+canopi-climate sample points.csv --grid out-v0.3 -o climate.csv
+canopi-climate sample points.csv --grid out-v0.3 --regions    # + wgsrpd_l3, iso_a2 columns
+canopi-climate verify-grid out-v0.3                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 
@@ -171,16 +171,16 @@ download anything.
 ```sh
 cargo build --release --features pipeline
 B=target/release/canopi-climate
-$B build-grid --sources /data/climate --out out-v0.2 --stage verify
-$B build-grid --sources /data/climate --out out-v0.2 --stage koppen
-$B build-grid --sources /data/climate --out out-v0.2 --stage chelsa
-$B build-grid --sources /data/climate --out out-v0.2 --stage beck    # or --beck-period 2041_2070_ssp245 ...
-$B build-grid --sources /data/climate --out out-v0.2 --stage check-future   # optional, needs the 5 CHELSA GCM files
-$B build-grid --sources /data/climate --out out-v0.2 --stage tiles
-$B build-grid --sources /data/climate --out out-v0.2 --stage regions  # 25 s
-$B build-grid --sources /data/climate --out out-v0.2 --stage soil     # 10 s; needs regions (land mask)
-$B build-grid --sources /data/climate --out out-v0.2 --stage extremes # needs the two Earth Engine rasters below
-$B verify-grid out-v0.2
+$B build-grid --sources /data/climate --out out-v0.3 --stage verify
+$B build-grid --sources /data/climate --out out-v0.3 --stage koppen
+$B build-grid --sources /data/climate --out out-v0.3 --stage chelsa
+$B build-grid --sources /data/climate --out out-v0.3 --stage beck    # or --beck-period 2041_2070_ssp245 ...
+$B build-grid --sources /data/climate --out out-v0.3 --stage check-future   # optional, needs the 5 CHELSA GCM files
+$B build-grid --sources /data/climate --out out-v0.3 --stage tiles
+$B build-grid --sources /data/climate --out out-v0.3 --stage regions  # 25 s
+$B build-grid --sources /data/climate --out out-v0.3 --stage soil     # 10 s; needs regions (land mask)
+$B build-grid --sources /data/climate --out out-v0.3 --stage extremes # needs the two Earth Engine rasters below
+$B verify-grid out-v0.3
 ```
 
 The `extremes` stage reads two rasters computed on Google Earth Engine by
@@ -335,8 +335,8 @@ cargo build --target wasm32-unknown-unknown --profile wasm --features wasm
 wasm-bindgen --target nodejs --out-dir pkg-node target/wasm32-unknown-unknown/wasm/canopi_climate.wasm
 node scripts/wasm-smoke.cjs                                      # includes the single-tile synthetic vectors
 cargo deny check bans licenses sources                           # cargo-deny 0.20
-CANOPI_CLIMATE_GRID=out-v0.2 cargo test --release --features pipeline -- --ignored   # against a built grid
-canopi-climate vectors --grid out-v0.2 --points vectors/points.csv --check vectors/lookup.json
+CANOPI_CLIMATE_GRID=out-v0.3 cargo test --release --features pipeline -- --ignored   # against a built grid
+canopi-climate vectors --grid out-v0.3 --points vectors/points.csv --check vectors/lookup.json
 ```
 
 CI tiers:
