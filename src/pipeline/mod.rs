@@ -10,6 +10,7 @@ pub mod aggregate;
 pub mod assemble;
 pub mod build;
 pub mod cog;
+pub mod extremes;
 pub mod igh;
 pub mod layers;
 pub mod netcdf;

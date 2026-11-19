@@ -9,6 +9,7 @@ use std::path::Path;
 use wbgeotiff::{CogWriter, Compression, GeoTransform};
 
 use super::{PipelineError, Result};
+use crate::extremes::{EXTREMES_BANDS, ExtremesTile};
 use crate::grid::{CELL_DEG, TILE_CELLS};
 use crate::layer::{LAYER_CELL_DEG, LAYER_TILE_CELLS, LayerTile};
 use crate::model::{BANDS, NODATA};
@@ -24,8 +25,12 @@ pub const INTERNAL_TILE: u32 = 112;
 /// # Errors
 /// Writer or I/O errors.
 pub fn write_tile(tile: &Tile, path: &Path) -> Result<()> {
-    let id = tile.id();
-    let bands = u16::try_from(BANDS).map_err(|e| PipelineError::Data(e.to_string()))?;
+    write_grid_tile(tile.id(), BANDS, tile.data(), path)
+}
+
+/// Write `bands` pixel-interleaved int16 bands of a 0.1-degree tile.
+fn write_grid_tile(id: crate::grid::TileId, bands: usize, data: &[i16], path: &Path) -> Result<()> {
+    let bands = u16::try_from(bands).map_err(|e| PipelineError::Data(e.to_string()))?;
     let side = u32::try_from(TILE_CELLS).map_err(|e| PipelineError::Data(e.to_string()))?;
     CogWriter::new(side, side, bands)
         .compression(Compression::Deflate)
@@ -39,8 +44,25 @@ pub fn write_tile(tile: &Tile, path: &Path) -> Result<()> {
             -CELL_DEG,
         ))
         .epsg(4326)
-        .write_i16(path, tile.data())?;
+        .write_i16(path, data)?;
     Ok(())
+}
+
+/// Write an `extremes` tile (0.1 degree, 18 bands) and read it back with
+/// the crate's reader; errors if the values differ.
+///
+/// # Errors
+/// Writer, reader or I/O errors, or a value mismatch.
+pub fn write_extremes_tile_checked(tile: &ExtremesTile, path: &Path) -> Result<Vec<u8>> {
+    write_grid_tile(tile.id(), EXTREMES_BANDS, tile.data(), path)?;
+    let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
+    if ExtremesTile::decode(&bytes)? != *tile {
+        return Err(PipelineError::Raster(format!(
+            "{}: read-back differs from the written tile",
+            path.display()
+        )));
+    }
+    Ok(bytes)
 }
 
 /// Write a tile and read it back with the crate's reader; errors if the
@@ -186,6 +208,27 @@ mod tests {
                 "{name} fixture drifted"
             );
         }
+    }
+
+    /// The committed extremes fixture is what the writer produces today
+    /// (`CANOPI_REGEN_FIXTURES=1` rewrites it).
+    #[test]
+    fn committed_extremes_fixture_is_reproducible() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-extremes-n50e000.tif"
+        );
+        let tile = crate::extremes::synthetic::extremes();
+        let bytes = write_extremes_tile_checked(&tile, &temp("extremes-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(fixture, &bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(fixture).unwrap(),
+            bytes,
+            "extremes fixture drifted"
+        );
+        assert!(Tile::decode(&bytes).is_err(), "not a climate tile");
     }
 
     /// The committed fixture is what the writer produces today. Set

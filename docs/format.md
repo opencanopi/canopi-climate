@@ -1,10 +1,11 @@
 # Tile format contract (normative)
 
-- Status: accepted (2026-11-12), crate 0.2.1, `format_version` 1.
+- Status: accepted (2026-11-12; extremes layer 2026-11-18), crate 0.3.0, `format_version` 1.
 - This document is the crate's architecture decision for the published grid: what a release
   contains and how a reader must interpret it. It is normative. The reasons behind the choices are
   in [0001](decisions/0001-tile-format.md) (container), [0002](decisions/0002-koppen-class-vs-monthly-means.md)
-  (Köppen class) and [0003](decisions/0003-site-layer-formats.md) (site layers).
+  (Köppen class), [0003](decisions/0003-site-layer-formats.md) (site layers) and
+  [0005](decisions/0005-annual-extremes.md) (annual extremes).
 - Machine-readable companions: `tests/fixtures/synthetic-expected.json` and `vectors/lookup.json`
   ([Vectors](#vectors)). Where this text and the vectors disagree, the vectors describe what the
   code does, and the disagreement is a bug in one of them.
@@ -20,6 +21,7 @@ A grid release is one tar (`canopi-climate-grid-vX.Y.Z.tar`) holding:
 | `manifest.json` | The grid description below; its SHA-256 identifies the grid. |
 | `tiles/<name>.tif` | Climate tiles, one per 10° tile with land. |
 | `soil/<name>.tif`, `regions/<name>.tif` | Site-layer tiles (`layers` in the manifest). |
+| `extremes/<name>.tif` | Annual-extremes tiles (a layer on the climate grid, since 0.3.0). |
 | `ATTRIBUTION.md` | Sources, licences, citations. |
 | `build-report.json` | The build's checks and counts (land cells, class/means contradictions, clamped extremes, source comparisons; `layers`: soil fill by distance, region codes). Informative: a reader does not need it. |
 | `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md` and every tile. |
@@ -146,6 +148,21 @@ nearest measured cell that far away.
 
 Letters are `A` = 0 … `Z` = 25. The scale is 1 and the unit `code`.
 
+### Extremes layer (`extremes/`): 18 bands
+
+On the climate grid: 0.1° cells, 100 × 100 per tile, the climate tiles' container (one internal tile
+of 112). 2 bands × 9 slots, band (0-based) = `band_index × 9 + slot_index`, slots as in the climate
+tiles (the layer's manifest entry repeats them under `slots`).
+
+| # | Band id | Unit | Scale | Content |
+|---|---|---|---|---|
+| 0 | `tmin_extreme` | °C | 0.1 | coldest night of a typical year: mean annual lowest daily minimum |
+| 1 | `tmax_extreme` | °C | 0.1 | hottest day of a typical year: mean annual highest daily maximum |
+
+A cell has all 18 values or none. It has values only where the climate cell is complete; a complete
+climate cell MAY have none (no source value nearby). `tmin_extreme ≤ tmin_cold` and
+`tmax_extreme ≥ tmax_warm` of the same slot.
+
 ## Encodings
 
 - **Quantisation (writer).** `q = round((value − offset) / scale)`, clamped to −32767…32767;
@@ -179,7 +196,8 @@ table holds both the raw `f32` (`margin_f32`) and the rounded value.
 
 ## Lookup semantics
 
-A lookup answers one point. Three lookups exist (climate, soil, regions), each in two forms:
+A lookup answers one point. Three lookups exist (climate, soil, regions), each in two forms (the
+extremes are read at the climate answer's cell, below):
 
 - **Cross-tile** (`lookup_across`; the CLI and the website): the search continues into
   neighbouring tiles, across the antimeridian, not across the poles.
@@ -219,6 +237,14 @@ on a grid without one (a 0.1.0 grid) it is `null` (`Grid::site`, `vectors::site`
 `lookupRegions` takes a regions tile, so it always returns an object; the host passes `null` itself
 when it has no tile.
 
+**Extremes answer**: no search. Read the cell holding the climate answer's (`cell_lat`, `cell_lon`)
+in the extremes tile named by its `tile` (`extremes::at_cell`; WebAssembly
+`lookupExtremes(tile, cell_lat, cell_lon)`). Fields: `cell_lat`, `cell_lon`, `tile`, and `periods`:
+one entry per slot with `period`, `scenario`, `tmin_extreme_c`, `tmax_extreme_c` and `usda_zone`.
+`null` without a climate answer, on a grid without the layer, without the tile, or where the cell has
+no values. `usda_zone` of `t` °C: `f = t × 9/5 + 32`, `h = clamp(floor((f + 60) / 5), 0, 25)`,
+zone `h / 2 + 1` (integer division) followed by `a` for even `h`, `b` for odd (the `usda` table).
+
 ## Errors
 
 | Kind | When | Reader behaviour |
@@ -250,7 +276,7 @@ Nothing in format 1 uses these bits yet; they are fixed now so a reader written 
 
 | Change | Allowed in | Requirement |
 |---|---|---|
-| New optional manifest field, new layer, new CLI flag or subcommand with output unchanged without it | patch (0.2.x) | `format_version` stays 1; readers ignore what they do not know; vectors unchanged byte for byte except `cli`. |
+| New optional manifest field, new layer, new CLI flag or subcommand with output unchanged without it | patch (0.2.x) | `format_version` stays 1; readers ignore what they do not know; vectors unchanged byte for byte except `cli`, and except a new layer's own answer key (`extremes`: `null` on a grid without the layer). |
 | New grid built with the same format (new sources, fixes) | minor (0.x.0) | New grid release and manifest SHA-256; vectors regenerated and reviewed. |
 | Any change to the container rules, georeferencing, cell edges, band order, a band's unit, scale or offset, the Köppen legend, the lookup search, or an answer's field | minor (0.x.0) with `format_version` + 1 | This document updated first; old readers refuse the new manifest by its version. |
 
@@ -261,11 +287,11 @@ A crate release that keeps the grid (0.2.1) names the grid release it was tested
 
 | File | Grid | Made by | Checked by |
 |---|---|---|---|
-| `tests/fixtures/synthetic-expected.json` | the committed synthetic tiles `tests/fixtures/synthetic{,-soil,-regions}-n50e000.tif` (written by `tile::synthetic` and `layer::synthetic`) | `UPDATE_FIXTURES=1 cargo test` | plain `cargo test` (stale file fails); the wasm smoke runs every `own_tile` point through the WebAssembly build |
+| `tests/fixtures/synthetic-expected.json` | the committed synthetic tiles `tests/fixtures/synthetic{,-soil,-regions,-extremes}-n50e000.tif` (written by `tile::synthetic`, `layer::synthetic` and `extremes::synthetic`) | `UPDATE_FIXTURES=1 cargo test` | plain `cargo test` (stale file fails); the wasm smoke runs every `own_tile` point through the WebAssembly build |
 | `vectors/lookup.json` | the release grid in `release/grid.json` | `canopi-climate vectors --grid <dir> --points vectors/points.csv -o vectors/lookup.json` | CI's grid job (`--check`, ignoring `cli`); attached to each release by `release.yml` |
 
-Both hold `points` (`name`, `lat`, `lon`, `own_tile`, and `expect`: the climate, soil and regions
-answers, or `"invalid"`) and `tables`: `legend`, `margin`, `texture`, `codes` (`encode`, `decode`) and
-`decode` (scale decoding). `vectors/lookup.json` has the website goldens' shape (`cli`,
+Both hold `points` (`name`, `lat`, `lon`, `own_tile`, and `expect`: the climate, soil, regions and
+extremes answers, or `"invalid"`) and `tables`: `legend`, `margin`, `texture`, `codes` (`encode`,
+`decode`), `decode` (scale decoding) and `usda` (USDA zones). `vectors/lookup.json` has the website goldens' shape (`cli`,
 `grid_manifest_sha256`, `points`) plus `own_tile` and `tables`. A port passes when it reproduces
 every `expect` its lookup form can answer and every table row.

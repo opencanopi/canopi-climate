@@ -23,6 +23,7 @@
 //! `wasm` exports [`wasm`] bindings.
 
 pub mod derived;
+pub mod extremes;
 pub mod grid;
 pub mod koppen;
 pub mod layer;

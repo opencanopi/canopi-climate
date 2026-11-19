@@ -53,6 +53,16 @@ assert.equal(coast.iso_a2_distance_cells, 1);
 const sea = cc.lookupRegions(regionsBytes, 48.0, 1.0);
 assert.equal(sea.wgsrpd_l3, null);
 assert.equal(sea.iso_a2, null);
+const extBytes = fixture("synthetic-extremes-n50e000.tif");
+const ext = cc.lookupExtremes(extBytes, r.cell_lat, r.cell_lon);
+assert.equal(ext.tile, "n50e000");
+assert.equal(ext.periods.length, 9);
+assert.equal(typeof ext.periods[0].tmin_extreme_c, "number");
+assert.ok(ext.periods[0].tmin_extreme_c < r.periods[0].tmin_cold_c);
+assert.equal(ext.periods[0].usda_zone, cc.usdaZone(ext.periods[0].tmin_extreme_c));
+assert.equal(cc.usdaZone(-8.4), "8b");
+assert.throws(() => cc.lookupExtremes(extBytes, 10, 10)); // wrong tile
+assert.throws(() => cc.lookupExtremes(bytes, r.cell_lat, r.cell_lon)); // a climate tile
 assert.equal(cc.textureClass(40, 20), "loam");
 assert.equal(cc.textureClass(70, 40), undefined);
 
@@ -74,6 +84,8 @@ for (const p of vectors.points) {
     soil: own ? cc.lookupSoil(soilBytes, p.lat, p.lon) : null,
     regions: own ? cc.lookupRegions(regionsBytes, p.lat, p.lon) : null,
   };
+  got.extremes = got.climate ? cc.lookupExtremes(extBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
+  assert.deepStrictEqual(got.extremes, p.expect.extremes, `${p.name}: extremes`);
   assert.deepStrictEqual(got.climate, p.expect.climate, `${p.name}: climate`);
   assert.deepStrictEqual(got.soil, p.expect.soil, `${p.name}: soil`);
   if (own) assert.deepStrictEqual(got.regions, p.expect.regions, `${p.name}: regions`);

@@ -38,8 +38,8 @@ pub struct Source {
     pub files: &'static [PinnedFile],
     /// Whether the grid needs these files (the rest serve checks only).
     pub required: bool,
-    /// What the source feeds: `climate` (the climate tiles), or a site
-    /// layer id (`soil`, `regions`).
+    /// What the source feeds: `climate` (the climate tiles), or a layer
+    /// id (`soil`, `regions`, `extremes`).
     pub layer: &'static str,
 }
 
@@ -328,6 +328,20 @@ const WGSRPD_FILES: &[PinnedFile] = &[pin(
     "c172bcf6aba20e19477adc60aebf0023068f0175dca8480f0760b090dcf64840",
 )];
 
+// The Earth Engine rasters are computed by `scripts/ee/extremes.py` and
+// published with the grid release that first used them.
+const ERA5_LAND_FILES: &[PinnedFile] = &[pin(
+    "ee/era5land_baseline.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.3.0/era5land_baseline.tif",
+    "295f703f7ceb4df31dce38d2201b09fff08ae693d60e3a507c4d4f083890cb55",
+)];
+
+const NEX_GDDP_FILES: &[PinnedFile] = &[pin(
+    "ee/nexgddp_k.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.3.0/nexgddp_k.tif",
+    "8820706498ee7c6dbd188a28aeac39f22eb93a9f29a130f100a46ef0af1bed67",
+)];
+
 /// Every source, grid inputs first.
 pub const SOURCES: &[Source] = &[
     Source {
@@ -395,6 +409,28 @@ pub const SOURCES: &[Source] = &[
         files: WGSRPD_FILES,
         required: true,
         layer: "regions",
+    },
+    Source {
+        id: "era5-land",
+        title: "ERA5-Land daily aggregates (ECMWF/ERA5_LAND/DAILY_AGGR on Google Earth Engine), daily minimum and maximum 2 m temperature, 1991-2020",
+        citation: "Muñoz-Sabater, J., et al. (2021). ERA5-Land: a state-of-the-art global reanalysis dataset for land applications. Earth System Science Data 13, 4349-4383. https://doi.org/10.5194/essd-13-4349-2021. Contains modified Copernicus Climate Change Service information.",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_DAILY_AGGR",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Reduced on Earth Engine by scripts/ee/extremes.py (baseline): per cell, the mean over 1991-2020 of each year's lowest daily minimum and highest daily maximum, minus the coldest month's mean daily minimum and the warmest month's mean daily maximum, on ERA5-Land's own 0.1-degree grid (the build interpolates bilinearly to its cell centres); float32 °C.",
+        files: ERA5_LAND_FILES,
+        required: true,
+        layer: "extremes",
+    },
+    Source {
+        id: "nex-gddp-cmip6",
+        title: "NASA Earth Exchange Global Daily Downscaled Projections, CMIP6 (NASA/GDDP-CMIP6 on Google Earth Engine), 16 models (one per model family), historical, SSP2-4.5, SSP5-8.5",
+        citation: "Thrasher, B., Wang, W., Michaelis, A., Melton, F., Lee, T., Nemani, R. (2022). NASA Global Daily Downscaled Projections, CMIP6. Scientific Data 9, 262. https://doi.org/10.1038/s41597-022-01393-4",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/NASA_GDDP-CMIP6",
+        licence: "CC0 1.0 (blanket licence for all NEX-GDDP-CMIP6 outputs since September 2022)",
+        notes: "Reduced on Earth Engine by scripts/ee/extremes.py (future, median): per model, the change of the extreme-minus-monthly gaps against coldest/warmest-month warming, fitted through the origin over 2041-2070 and 2071-2099 under SSP2-4.5 and SSP5-8.5 (1991-2020 = historical 1991-2014 + SSP2-4.5 2015-2020); the median over the models, 1 degree, float32.",
+        files: NEX_GDDP_FILES,
+        required: true,
+        layer: "extremes",
     },
 ];
 
@@ -486,7 +522,7 @@ mod tests {
                 .iter()
                 .all(|f| f.url.starts_with(SOILGRIDS_BASE))
         );
-        for layer in ["climate", "soil", "regions"] {
+        for layer in ["climate", "soil", "regions", "extremes"] {
             assert!(!manifest_sources(layer).is_empty(), "{layer}");
         }
     }
@@ -502,6 +538,8 @@ mod tests {
                 + SOILGRIDS_FILES.len()
                 + NATURAL_EARTH_FILES.len()
                 + WGSRPD_FILES.len()
+                + ERA5_LAND_FILES.len()
+                + NEX_GDDP_FILES.len()
         );
         assert!(problems[0].starts_with("missing beck2023/"));
         assert!(pinned(&dir, "chelsa/CHELSA_bio6_1981-2010_V.2.1.tif").is_ok());

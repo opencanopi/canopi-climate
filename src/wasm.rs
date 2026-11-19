@@ -1,10 +1,11 @@
 //! WebAssembly bindings (`wasm` feature). The host fetches the tile file
-//! itself (whole file), then calls [`lookup_js`], [`lookup_soil_js`] or
-//! [`lookup_regions_js`]. The climate, soil and regions tiles of a point
-//! share one name, in three directories.
+//! itself (whole file), then calls [`lookup_js`], [`lookup_soil_js`],
+//! [`lookup_regions_js`] or [`lookup_extremes_js`]. The climate, soil,
+//! regions and extremes tiles of a point share one name, in four
+//! directories.
 //!
 //! ```js
-//! import init, { tileName, lookup, lookupSoil, lookupRegions } from "./canopi_climate.js";
+//! import init, { tileName, lookup, lookupSoil, lookupRegions, lookupExtremes } from "./canopi_climate.js";
 //! const name = tileName(lat, lon);              // "n50e000.tif", or undefined
 //! const get = async (dir) => {
 //!   const res = await fetch(`/data/climate/${dir}/${name}`);  // 404: no data in the tile
@@ -15,6 +16,9 @@
 //! const climate = tiles ? lookup(tiles, lat, lon) : null;            // object, or null at sea
 //! const soil = soilTile ? lookupSoil(soilTile, lat, lon) : null;     // object, or null
 //! const regions = regionsTile ? lookupRegions(regionsTile, lat, lon) : null; // { wgsrpd_l3, iso_a2, ... }
+//! // Extremes: read at the climate lookup's own cell (in the point's tile for a single-tile reader).
+//! const extTile = climate ? await get("extremes") : null;
+//! const extremes = extTile ? lookupExtremes(extTile, climate.cell_lat, climate.cell_lon) : null;
 //! ```
 
 use wasm_bindgen::prelude::{JsError, JsValue, wasm_bindgen};
@@ -92,6 +96,38 @@ pub fn lookup_regions_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result<JsValu
 #[must_use]
 pub fn texture_class_js(sand_pct: f64, clay_pct: f64) -> Option<String> {
     crate::soil::texture_class(sand_pct, clay_pct).map(|c| c.id().to_string())
+}
+
+/// Decode an extremes tile and read the cell holding (`cellLat`, `cellLon`):
+/// pass the climate lookup's `cell_lat` and `cell_lon`. Returns the
+/// [`crate::extremes::ExtremesLookup`] as a plain object (`periods[]` with
+/// `tmin_extreme_c`, `tmax_extreme_c`, `usda_zone`), or `null` when that
+/// cell has no extremes.
+///
+/// # Errors
+/// Throws when the bytes are not an extremes tile, the coordinate is
+/// invalid or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupExtremes)]
+pub fn lookup_extremes_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::extremes::ExtremesTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::extremes::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// USDA hardiness zone (`1a` ... `13b`) of a coldest night in °C.
+#[wasm_bindgen(js_name = usdaZone)]
+#[must_use]
+pub fn usda_zone_js(tmin_extreme_c: f64) -> String {
+    crate::extremes::usda_zone(tmin_extreme_c)
 }
 
 /// Crate version, for logs and cache keys.

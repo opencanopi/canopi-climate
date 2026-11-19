@@ -36,7 +36,7 @@ enum Command {
         #[arg(long)]
         work: Option<PathBuf>,
         /// Stages to run (repeatable); default: verify, koppen, chelsa, beck,
-        /// tiles, regions, soil.
+        /// tiles, regions, soil, extremes.
         #[arg(long = "stage", value_enum)]
         stages: Vec<Stage>,
         /// Only these Beck periods in the `beck` stage (e.g. 1991_2020, 2041_2070_ssp245).
@@ -76,8 +76,8 @@ enum Command {
         #[arg(long)]
         regions: bool,
     },
-    /// Look one point up and print JSON: `climate`, `soil` and `regions`
-    /// (each `null` when absent; exit code 2 when all are).
+    /// Look one point up and print JSON: `climate`, `extremes`, `soil` and
+    /// `regions` (each `null` when absent; exit code 2 when all are).
     Lookup {
         /// Latitude (degrees north).
         #[arg(allow_hyphen_values = true)]
@@ -205,7 +205,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let m = g.manifest();
             let layer_tiles: usize = m.layers.iter().map(|l| l.tiles.len()).sum();
             eprintln!(
-                "{} climate tiles, {layer_tiles} site-layer tiles, {} problems",
+                "{} climate tiles, {layer_tiles} layer tiles, {} problems",
                 m.tiles.len(),
                 problems.len()
             );

@@ -4,3 +4,4 @@
 /pkg/
 /pkg-node/
 !tests/fixtures/*.tif
+__pycache__/

@@ -16,8 +16,18 @@ scenarios (SSP1-2.6, SSP2-4.5, SSP3-7.0, SSP5-8.5):
 | `aridity` | ratio | annual precipitation / Thornthwaite potential evapotranspiration (capped at 300; no data where PET is below 1 mm/year, e.g. ice sheets) |
 | `dry_months` | months | months with precipitation (mm) below twice the temperature (°C) (Gaussen) |
 
-No hardiness zone is derived: `tmin_cold` is a monthly mean, not the annual
-extreme minimum that USDA zones need.
+The `extremes` layer (0.3.0), on the same 0.1° cells, adds the annual
+extremes that monthly means hide, for the same 9 periods and scenarios:
+
+| Field | Unit | Meaning |
+|---|---|---|
+| `tmin_extreme_c` | °C | coldest night of a typical year (mean annual lowest daily minimum) |
+| `tmax_extreme_c` | °C | hottest day of a typical year (mean annual highest daily maximum) |
+| `usda_zone` | zone | USDA hardiness zone of `tmin_extreme_c` (`1a` … `13b`), derived at lookup |
+
+`tmin_cold` (about 0 °C in central France) is a monthly mean of nightly
+lows; `tmin_extreme` (about −8 °C there) is the night that decides whether a
+plant survives the winter.
 
 Two site layers, on a finer 0.05° grid (about 5.5 km) in the same 10° tiles,
 describe the place itself:
@@ -89,7 +99,7 @@ println!("{:?} {:?}", r.wgsrpd_l3, r.iso_a2);              // Some("FRA") Some("
 ### JavaScript (WebAssembly)
 
 ```js
-import init, { tileName, lookup, lookupSoil, lookupRegions, textureClass } from "./pkg/canopi_climate.js";
+import init, { tileName, lookup, lookupSoil, lookupRegions, lookupExtremes, textureClass } from "./pkg/canopi_climate.js";
 await init();
 const name = tileName(lat, lon);                    // "n50e000.tif", or undefined
 const get = async (dir) => {                        // 404: the layer has no data in the tile
@@ -100,24 +110,27 @@ const tiles = await get("tiles"), soilTile = await get("soil"), regionsTile = aw
 const climate = tiles ? lookup(tiles, lat, lon) : null;
 const soil = soilTile ? lookupSoil(soilTile, lat, lon) : null;
 const regions = regionsTile ? lookupRegions(regionsTile, lat, lon) : null;  // { wgsrpd_l3, iso_a2, ... }
+// Extremes have no search of their own: read them at the climate answer's cell.
+const extremesTile = climate ? await get("extremes") : null;
+const extremes = extremesTile ? lookupExtremes(extremesTile, climate.cell_lat, climate.cell_lon) : null;
 ```
 
 The results are plain objects with the fields of `Lookup` (`koppen`,
 `tmin_cold_c`, …, one entry per period and scenario), `SoilLookup` and
-`RegionsLookup`, or `null`. One location fetches three tiles: in the v0.2
-build the median climate tile is 125 KB, soil 45 KB and regions 1.4 KB.
+`RegionsLookup` and `ExtremesLookup`, or `null`. One location fetches four tiles: in the v0.3
+build the median climate tile is 125 KB, extremes 52 KB, soil 45 KB and regions 1.4 KB.
 
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.2          # JSON: climate, soil, regions
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.2          # JSON: climate, soil, regions, extremes
 canopi-climate sample points.csv --grid out-v0.2 -o climate.csv
 canopi-climate sample points.csv --grid out-v0.2 --regions    # + wgsrpd_l3, iso_a2 columns
 canopi-climate verify-grid out-v0.2                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 
-`lookup` prints `{"climate": …, "soil": …, "regions": …}`; each part is
+`lookup` prints `{"climate": …, "extremes": …, "regions": …, "soil": …}`; each part is
 `null` when absent (exit code 2 when all are). For Paris:
 
 ```json
@@ -166,7 +179,22 @@ $B build-grid --sources /data/climate --out out-v0.2 --stage check-future   # op
 $B build-grid --sources /data/climate --out out-v0.2 --stage tiles
 $B build-grid --sources /data/climate --out out-v0.2 --stage regions  # 25 s
 $B build-grid --sources /data/climate --out out-v0.2 --stage soil     # 10 s; needs regions (land mask)
+$B build-grid --sources /data/climate --out out-v0.2 --stage extremes # needs the two Earth Engine rasters below
 $B verify-grid out-v0.2
+```
+
+The `extremes` stage reads two rasters computed on Google Earth Engine by
+`scripts/ee/extremes.py`. Both are assets of the v0.3.0 release (the pinned
+URLs), so a rebuild needs no Earth Engine account. Recomputing them needs an
+Earth Engine project and Google Drive (about 20 MB downloaded; each model
+export takes about an hour of Earth Engine time):
+
+```sh
+python scripts/ee/extremes.py --project <id> baseline           # ERA5-Land 1991-2020 gaps, 0.1°
+python scripts/ee/extremes.py --project <id> future             # one export per NEX-GDDP-CMIP6 model
+python scripts/ee/extremes.py --project <id> status
+python scripts/ee/extremes.py --project <id> download --out /data/climate/ee   # into ee/drive
+python scripts/ee/extremes.py --project <id> combine --out /data/climate/ee    # the 2 build inputs
 ```
 
 The release directory holds `tiles/*.tif`, `soil/*.tif`, `regions/*.tif`,
@@ -195,6 +223,15 @@ mask; the next `soil` stage rebuilds it.
   coldest/warmest monthly mean (delta method). They are clamped so that the
   minimum never exceeds the coldest-month mean and the maximum never falls
   below the warmest-month mean.
+
+- **Coldest night, hottest day** (`docs/decisions/0005-annual-extremes.md`):
+  the grid's `tmin_cold` (`tmax_warm`) plus the ERA5-Land 1991–2020 gap
+  between the mean annual extreme and that monthly value, plus a change with
+  warming: the median over 16 NEX-GDDP-CMIP6 models (one per model family) of how much the gap
+  moves per degree of coldest-month (warmest-month) warming, times each
+  slot's warming in Beck et al. ERA5-Land (about 9 km) misses cold-air
+  pools: in hilly country the coldest night can be 2–3 °C milder than at a
+  station in the valley.
 
 - **Soil**: each 0.05° cell centre is projected to Interrupted Goode
   Homolosine (twelve `proj4rs` sinusoidal/Mollweide lobes, equal to PROJ's
@@ -242,6 +279,19 @@ and their citations go with any use of it (`ATTRIBUTION.md` in each release).
   climate-related predictors at kilometre resolution for the past and future.
   *Earth System Science Data* 14, 5573–5603.
   <https://doi.org/10.5194/essd-14-5573-2022>.
+
+- **ERA5-Land** daily aggregates (`ECMWF/ERA5_LAND/DAILY_AGGR` on Google
+  Earth Engine), 1991–2020 daily minimum and maximum temperature, licensed
+  **CC BY 4.0** (Copernicus). Muñoz-Sabater, J., et al. (2021). ERA5-Land: a
+  state-of-the-art global reanalysis dataset for land applications. *Earth
+  System Science Data* 13, 4349–4383. <https://doi.org/10.5194/essd-13-4349-2021>.
+  Contains modified Copernicus Climate Change Service information.
+- **NEX-GDDP-CMIP6** (`NASA/GDDP-CMIP6` on Google Earth Engine), daily
+  `tas`, `tasmin`, `tasmax` of 16 models (one per model family), historical, SSP2-4.5 and SSP5-8.5.
+  Thrasher, B., Wang, W., Michaelis, A., Melton, F., Lee, T., Nemani, R.
+  (2022). NASA Global Daily Downscaled Projections, CMIP6. *Scientific Data*
+  9, 262. <https://doi.org/10.1038/s41597-022-01393-4>. Made available by
+  NASA under a blanket **CC0 1.0** licence (since September 2022).
 
 - **SoilGrids 2.0**: pH (water), sand and clay, 0–5, 5–15 and 15–30 cm,
   5-km aggregates of the mean prediction, licensed **CC BY 4.0**. Poggio, L.,

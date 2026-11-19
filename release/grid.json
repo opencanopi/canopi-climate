@@ -1,9 +1,9 @@
 {
   "description": "The grid release the crate is tested against (CI's grid job) and that a crate release names (release.yml). A patch release that does not rebuild the grid keeps the previous grid's tag.",
-  "tag": "v0.2.0",
-  "asset": "canopi-climate-grid-v0.2.0.tar",
-  "url": "https://github.com/opencanopi/canopi-climate/releases/download/v0.2.0/canopi-climate-grid-v0.2.0.tar",
-  "sha256": "56f717f1e2618bbdffe8462bc221186729dad419e58073afb58ac239ba8a26d5",
-  "bytes": 99194880,
-  "manifest_sha256": "04ec85f4603f29c5add8eada88c79599d044a61732b518a095f91b68e64b0e4c"
+  "tag": "v0.3.0",
+  "asset": "canopi-climate-grid-v0.3.0.tar",
+  "url": "https://github.com/opencanopi/canopi-climate/releases/download/v0.3.0/canopi-climate-grid-v0.3.0.tar",
+  "sha256": "6d0ad049b9ec49754a8dbbd37c2f160280cef0972073448beff9f65843ce9add",
+  "bytes": 124928000,
+  "manifest_sha256": "517c2489471b7e32f9dd6782c6522df7d652e5ac781730e6b4011e4e6a6f2f44"
 }

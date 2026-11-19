@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::{PipelineError, Result};
+use crate::extremes::ExtremesTile;
 use crate::grid::TileId;
 use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
 use crate::lookup::{Lookup, lookup_across, search_tiles};
@@ -12,7 +13,7 @@ use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
-use crate::vectors::{LayerTiles, Site};
+use crate::vectors::{ExtremesTiles, Getters, LayerTiles, Site};
 
 /// Decoded tiles kept in memory at most (about 1.4 MB each).
 const CACHE_TILES: usize = 96;
@@ -30,6 +31,7 @@ pub struct Grid {
     /// (layer id, tile name) -> path.
     layer_paths: HashMap<(String, String), String>,
     layer_cache: HashMap<(String, TileId), LayerTile>,
+    extremes_cache: HashMap<TileId, ExtremesTile>,
 }
 
 impl Grid {
@@ -71,6 +73,7 @@ impl Grid {
             cache: HashMap::new(),
             layer_paths,
             layer_cache: HashMap::new(),
+            extremes_cache: HashMap::new(),
         })
     }
 
@@ -146,18 +149,54 @@ impl Grid {
         if regions {
             self.load_layer("regions", REGION_BANDS, lat, lon, r)?;
         }
-        let (cache, layers) = (&self.cache, &self.layer_cache);
+        let extremes = self.has_layer(crate::extremes::DIR);
+        if extremes {
+            self.load_extremes(lat, lon, radius)?;
+        }
+        let (cache, layers, ext) = (&self.cache, &self.layer_cache, &self.extremes_cache);
         let climate_tiles = |id: TileId| cache.get(&id);
         let soil_tiles = |id: TileId| layers.get(&("soil".to_string(), id));
         let region_tiles = |id: TileId| layers.get(&("regions".to_string(), id));
-        crate::vectors::site(
-            &climate_tiles,
-            soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
-            regions.then_some(&region_tiles as LayerTiles<'_, '_>),
-            (lat, lon, radius),
-            own_tile_only,
-        )
-        .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
+        let extremes_tiles = |id: TileId| ext.get(&id);
+        let g = Getters {
+            climate: &climate_tiles,
+            soil: soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
+            regions: regions.then_some(&region_tiles as LayerTiles<'_, '_>),
+            extremes: extremes.then_some(&extremes_tiles as ExtremesTiles<'_, '_>),
+        };
+        crate::vectors::site(g, (lat, lon, radius), own_tile_only)
+            .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
+    }
+
+    /// Decode the extremes tiles the climate search can reach (the
+    /// extremes are read at the climate lookup's cell).
+    fn load_extremes(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.extremes_cache.len() + ids.len() > CACHE_TILES {
+            self.extremes_cache.clear();
+        }
+        for t in ids {
+            if self.extremes_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::extremes::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = ExtremesTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.extremes_cache.insert(t, tile);
+        }
+        Ok(())
     }
 
     /// The grid directory.
@@ -250,13 +289,16 @@ impl Grid {
     /// I/O errors other than a missing file.
     pub fn verify(&self) -> Result<Vec<String>> {
         let mut problems = Vec::new();
-        let climate = self.manifest.tiles.iter().map(|t| (t, None));
-        let layer_tiles = self
-            .manifest
-            .layers
-            .iter()
-            .flat_map(|l| l.tiles.iter().map(|t| (t, Some(l.bands.len()))));
-        for (t, layer_bands) in climate.chain(layer_tiles) {
+        let climate = self.manifest.tiles.iter().map(|t| (t, Kind::Climate));
+        let layer_tiles = self.manifest.layers.iter().flat_map(|l| {
+            let kind = if l.id == crate::extremes::DIR {
+                Kind::Extremes
+            } else {
+                Kind::Layer(l.bands.len())
+            };
+            l.tiles.iter().map(move |t| (t, kind))
+        });
+        for (t, kind) in climate.chain(layer_tiles) {
             let p = self.dir.join(&t.path);
             match std::fs::read(&p) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -273,7 +315,7 @@ impl Grid {
                     problems.push(format!("{}: checksum mismatch", t.path));
                 }
                 Ok(b) => {
-                    if let Some(p) = decode_problem(&b, layer_bands, &t.name) {
+                    if let Some(p) = decode_problem(&b, kind, &t.name) {
                         problems.push(format!("{}: {p}", t.path));
                     }
                 }
@@ -283,12 +325,21 @@ impl Grid {
     }
 }
 
+/// What a tile file holds.
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    Climate,
+    /// A 0.05-degree site layer with this many bands.
+    Layer(usize),
+    Extremes,
+}
+
 /// Why a tile file does not decode as the tile `name` (`None`: it does).
-/// `layer_bands`: `None` for a climate tile, else the layer's band count.
-fn decode_problem(bytes: &[u8], layer_bands: Option<usize>, name: &str) -> Option<String> {
-    let id = match layer_bands {
-        None => Tile::decode(bytes).map(|t| t.id()),
-        Some(bands) => LayerTile::decode(bytes, bands).map(|t| t.id()),
+fn decode_problem(bytes: &[u8], kind: Kind, name: &str) -> Option<String> {
+    let id = match kind {
+        Kind::Climate => Tile::decode(bytes).map(|t| t.id()),
+        Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| t.id()),
+        Kind::Extremes => ExtremesTile::decode(bytes).map(|t| t.id()),
     };
     match id {
         Err(e) => Some(e.to_string()),

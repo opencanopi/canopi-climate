@@ -15,6 +15,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::extremes::{self, ExtremesLookup, ExtremesTile};
 use crate::grid::TileId;
 use crate::koppen;
 use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
@@ -28,6 +29,22 @@ use crate::tile::Tile;
 pub type ClimateTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a Tile>;
 /// A layer tile getter: the decoded tile, or `None` (no file).
 pub type LayerTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a LayerTile>;
+/// An extremes tile getter: the decoded tile, or `None` (no file).
+pub type ExtremesTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a ExtremesTile>;
+
+/// The tile getters of a grid: climate, and each layer (`None`: the grid
+/// has no such layer).
+#[derive(Clone, Copy)]
+pub struct Getters<'a, 'b> {
+    /// Climate tiles.
+    pub climate: ClimateTiles<'a, 'b>,
+    /// Soil tiles.
+    pub soil: Option<LayerTiles<'a, 'b>>,
+    /// Regions tiles.
+    pub regions: Option<LayerTiles<'a, 'b>>,
+    /// Extremes tiles.
+    pub extremes: Option<ExtremesTiles<'a, 'b>>,
+}
 
 /// What a reader answers at a point (the CLI's `lookup` JSON).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -38,14 +55,17 @@ pub struct Site {
     pub soil: Option<SoilLookup>,
     /// Regions, `None` without the layer.
     pub regions: Option<RegionsLookup>,
+    /// Coldest night and hottest day at the climate lookup's cell, `None`
+    /// without the layer, without climate, or where the cell has none.
+    pub extremes: Option<ExtremesLookup>,
 }
 
 impl Site {
-    /// `{"climate": …, "soil": …, "regions": …}` (keys sorted), as printed
-    /// by `canopi-climate lookup`.
+    /// `{"climate": …, "extremes": …, "regions": …, "soil": …}` (keys
+    /// sorted), as printed by `canopi-climate lookup`.
     #[must_use]
     pub fn json(&self) -> Value {
-        json!({ "climate": self.climate, "soil": self.soil, "regions": self.regions })
+        json!({ "climate": self.climate, "soil": self.soil, "regions": self.regions, "extremes": self.extremes })
     }
 
     /// Whether any part has data (`lookup` exits 2 when none has).
@@ -74,27 +94,44 @@ impl Site {
                 )
             })
         };
-        self.climate == other.climate && self.soil == other.soil && codes(self) == codes(other)
+        self.climate == other.climate
+            && self.soil == other.soil
+            && self.extremes == other.extremes
+            && codes(self) == codes(other)
     }
 }
 
-/// Answer a point from decoded tiles. `soil`/`regions` `None`: the grid
-/// has no such layer. With `own_tile_only`, every getter is limited to the
-/// point's own tile: the answer of a reader that fetched that tile only.
+/// Answer a point from decoded tiles. With `own_tile_only`, every getter is
+/// limited to the point's own tile: the answer of a reader that fetched
+/// that tile only. The extremes are read at the climate lookup's cell, in
+/// that cell's tile.
 ///
 /// # Errors
 /// [`LookupError::InvalidCoordinate`].
 pub fn site(
-    climate: ClimateTiles<'_, '_>,
-    soil: Option<LayerTiles<'_, '_>>,
-    regions: Option<LayerTiles<'_, '_>>,
+    g: Getters<'_, '_>,
     (lat, lon, radius): (f64, f64, usize),
     own_tile_only: bool,
 ) -> Result<Site, LookupError> {
+    let Getters {
+        climate,
+        soil,
+        regions,
+        extremes: ext,
+    } = g;
     let own = TileId::of(lat, lon).ok_or(LookupError::InvalidCoordinate)?;
     let keep = |id: TileId| !own_tile_only || id == own;
     let c = |id: TileId| climate(id).filter(|_| keep(id));
     let climate = lookup_across(c, lat, lon, radius)?;
+    let extremes = match (ext, &climate) {
+        (Some(get), Some(c)) => {
+            match TileId::parse(&c.tile).and_then(|id| get(id).filter(|_| keep(id))) {
+                Some(t) => extremes::at_cell(t, c.cell_lat, c.cell_lon)?,
+                None => None,
+            }
+        }
+        _ => None,
+    };
     let soil = match soil {
         Some(get) => {
             let g = |id: TileId| get(id).filter(|_| keep(id));
@@ -113,6 +150,7 @@ pub fn site(
         climate,
         soil,
         regions,
+        extremes,
     })
 }
 
@@ -120,16 +158,9 @@ pub fn site(
 /// every reader refuses) and whether a single-tile reader agrees
 /// (`own_tile`).
 #[must_use]
-pub fn point(
-    name: &str,
-    (lat, lon): (f64, f64),
-    climate: ClimateTiles<'_, '_>,
-    soil: Option<LayerTiles<'_, '_>>,
-    regions: Option<LayerTiles<'_, '_>>,
-    radius: usize,
-) -> Value {
-    let all = site(climate, soil, regions, (lat, lon, radius), false);
-    let own = site(climate, soil, regions, (lat, lon, radius), true);
+pub fn point(name: &str, (lat, lon): (f64, f64), g: Getters<'_, '_>, radius: usize) -> Value {
+    let all = site(g, (lat, lon, radius), false);
+    let own = site(g, (lat, lon, radius), true);
     match (all, own) {
         (Ok(all), Ok(own)) => json!({
             "name": name, "lat": lat, "lon": lon,
@@ -280,12 +311,20 @@ pub fn tables() -> Value {
             );
         }
     }
+    let usda: Vec<Value> = [
+        -60.0, -51.2, -51.1, -17.8, -17.7, -12.3, -12.2, -8.4, -6.7, -6.6, 0.0, 4.4, 4.5, 21.0,
+        40.0,
+    ]
+    .iter()
+    .map(|&c: &f64| json!({ "tmin_extreme_c": c, "zone": extremes::usda_zone(c) }))
+    .collect();
     json!({
         "legend": legend,
         "margin": margin,
         "texture": texture,
         "codes": { "encode": encode, "decode": decode_codes },
         "decode": decode,
+        "usda": usda,
     })
 }
 
@@ -379,6 +418,7 @@ mod tests {
         let l = |x: f64, y: f64| (r6(50.0 - (y + 0.5) * 0.05), r6((x + 0.5) * 0.05));
         let mut p: Vec<(String, (f64, f64))> = vec![
             ("climate cell 50,40".into(), c(50.0, 40.0)),
+            ("extremes gap, climate cell 60,40".into(), c(60.0, 40.0)),
             ("two cells west of the block".into(), c(18.0, 40.0)),
             ("three cells west of the block".into(), c(17.0, 40.0)),
             ("2.83-cell diagonal".into(), c(18.0, 28.0)),
@@ -415,15 +455,24 @@ mod tests {
     fn expected_json() -> String {
         let t = synthetic::tile(TileId::parse("n50e000").unwrap());
         let (soil, regions) = (layers::soil(), layers::regions());
+        let ext = crate::extremes::synthetic::extremes();
         let ct = |id: TileId| (id == t.id()).then_some(&t);
         let st = |id: TileId| (id == soil.id()).then_some(&soil);
         let rt = |id: TileId| (id == regions.id()).then_some(&regions);
+        let et = |id: TileId| (id == ext.id()).then_some(&ext);
+        let g = Getters {
+            climate: &ct,
+            soil: Some(&st),
+            regions: Some(&rt),
+            extremes: Some(&et),
+        };
         let points: Vec<Value> = points()
             .iter()
-            .map(|(name, lat, lon)| point(name, (*lat, *lon), &ct, Some(&st), Some(&rt), 2))
+            .map(|(name, lat, lon)| point(name, (*lat, *lon), g, 2))
             .collect();
         let tiles = json!({
             "climate": "tests/fixtures/synthetic-n50e000.tif",
+            "extremes": "tests/fixtures/synthetic-extremes-n50e000.tif",
             "soil": "tests/fixtures/synthetic-soil-n50e000.tif",
             "regions": "tests/fixtures/synthetic-regions-n50e000.tif",
         });

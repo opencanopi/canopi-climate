@@ -63,6 +63,11 @@ pub struct LayerSpec {
     pub tiles: Vec<TileSpec>,
     /// Notes on methods and known limits.
     pub notes: Vec<String>,
+    /// The (period, scenario) slots of a layer whose bands repeat per slot
+    /// (`extremes`, 0.3.0); absent for a static layer. Band
+    /// `band_index * slots.len() + slot` holds band `band_index` for `slot`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slots: Vec<SlotSpec>,
 }
 
 /// Grid geometry.

@@ -277,6 +277,7 @@ fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
             "Silt is 100 % minus sand and clay; the USDA texture class is derived at lookup.".into(),
             "Tiles without any soil value are absent.".into(),
         ],
+        slots: vec![],
     }
 }
 

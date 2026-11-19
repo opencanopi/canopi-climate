@@ -11,6 +11,7 @@
 //! | `tiles` | the work files | out: `tiles/*.tif`, `manifest.json`, `SHA256SUMS`, `build-report.json`, `ATTRIBUTION.md` (site layers already built carry over) |
 //! | `regions` | WGSRPD level 3, Natural Earth admin-0 map units 1:50m | out: `regions/*.tif`, manifest layer `regions`; removes a `soil` layer built on older regions |
 //! | `soil` | SoilGrids 2.0 5 km aggregates, the `regions` layer (land mask) | out: `soil/*.tif`, manifest layer `soil` |
+//! | `extremes` | the climate tiles, ERA5-Land and NEX-GDDP-CMIP6 rasters from Earth Engine (`scripts/ee/extremes.py`) | out: `extremes/*.tif`, manifest layer `extremes` |
 //! | `check-future` | CHELSA 2041-2070 SSP3-7.0 bio6 (5 GCMs) | `check-future.json` |
 
 use std::collections::BTreeMap;
@@ -45,12 +46,14 @@ pub enum Stage {
     Regions,
     /// Site layer: SoilGrids pH, sand, clay (after `regions`).
     Soil,
+    /// Layer: coldest night and hottest day per slot (after `tiles`).
+    Extremes,
     /// Compare the delta method with CHELSA's own projections.
     CheckFuture,
 }
 
 /// Stages run by default, in order.
-pub const DEFAULT_STAGES: [Stage; 7] = [
+pub const DEFAULT_STAGES: [Stage; 8] = [
     Stage::Verify,
     Stage::Koppen,
     Stage::Chelsa,
@@ -58,6 +61,7 @@ pub const DEFAULT_STAGES: [Stage; 7] = [
     Stage::Tiles,
     Stage::Regions,
     Stage::Soil,
+    Stage::Extremes,
 ];
 
 /// Build settings.
@@ -155,6 +159,7 @@ pub fn run(cfg: &BuildConfig, stages: &[Stage]) -> Result<()> {
             Stage::Tiles => super::assemble::stage_tiles(cfg)?,
             Stage::Regions => super::regions::stage_regions(cfg)?,
             Stage::Soil => super::soil::stage_soil(cfg)?,
+            Stage::Extremes => super::extremes::stage_extremes(cfg)?,
             Stage::CheckFuture => stage_check_future(cfg)?,
         }
         eprintln!(

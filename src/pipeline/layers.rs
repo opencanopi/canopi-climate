@@ -307,6 +307,7 @@ mod tests {
             sources: vec!["soilgrids-2.0".into()],
             tiles: specs,
             notes: vec![],
+            slots: vec![],
         };
         register(&out, layer.clone(), json!({"ok": 1})).unwrap();
         register(&out, layer, json!({"ok": 2})).unwrap();

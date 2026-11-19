@@ -347,6 +347,7 @@ pub(crate) fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
             "Natural Earth country codes (map units): Jan Mayen -> SJ as in ISO 3166-1, else ISO_A2_EH when two letters, else ISO_A2, else Somaliland -> SO and Northern Cyprus -> CY (de jure); the Siachen Glacier has no country. Natural Earth draws de facto boundaries.".into(),
             "Tiles where neither band has a code are absent.".into(),
         ],
+        slots: vec![],
     }
 }
 
