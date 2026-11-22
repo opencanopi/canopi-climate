@@ -29,6 +29,15 @@ extremes that monthly means hide, for the same 9 periods and scenarios:
 lows; `tmin_extreme` (about −8 °C there) is the night that decides whether a
 plant survives the winter.
 
+Two monthly climatology layers (0.4.0), for three slots (`1991-2020`, `2041-2070` SSP2-4.5, `2071-2099` SSP2-4.5), add the seasonal cycle:
+
+| Layer | Resolution | Field | Unit | Meaning |
+|---|---|---|---|---|
+| `monthly` | 0.1° | `tmean_c`, `tmin_c` | °C | 12 monthly mean and mean-daily-minimum temperatures (0.5 °C step) |
+| `monthly` | 0.1° | `dry_mask` | bits | 12-bit Gaussen dry-month mask (bit `m` = month `m+1` has `p < 2t`) |
+| `monthly` | 0.1° | `gdd_base_10`, `chill_months` | °C·day, months | annual growing degree-days (base 10 °C) and chill-month count (`0 < tmean <= 7.2 °C`), derived at lookup |
+| `monthly_precip` | 0.25° | `precip_mm` | mm/month | 12 monthly precipitation totals (1 mm step, land-cell mean) |
+
 Two site layers, on a finer 0.05° grid (about 5.5 km) in the same 10° tiles,
 describe the place itself:
 
@@ -123,21 +132,22 @@ const monthlyPrecip = precipTile ? lookupMonthlyPrecip(precipTile, lat, lon) : n
 ```
 
 The results are plain objects with the fields of `Lookup` (`koppen`,
-`tmin_cold_c`, …, one entry per period and scenario), `SoilLookup` and
-`RegionsLookup` and `ExtremesLookup`, or `null`. One location fetches four tiles: in the v0.3
-build the median climate tile is 125 KB, extremes 52 KB, soil 45 KB and regions 1.4 KB.
+`tmin_cold_c`, …, one entry per period and scenario), `SoilLookup`,
+`RegionsLookup`, `ExtremesLookup`, `MonthlyLookup` and `MonthlyPrecipLookup`, or `null`.
+In the v0.4 build the median climate tile is 126 KB, monthly 80 KB, extremes 53 KB,
+soil 45 KB, monthly_precip 14 KB and regions 1.4 KB.
 
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.3          # JSON: climate, soil, regions, extremes
-canopi-climate sample points.csv --grid out-v0.3 -o climate.csv
-canopi-climate sample points.csv --grid out-v0.3 --regions    # + wgsrpd_l3, iso_a2 columns
-canopi-climate verify-grid out-v0.3                           # sizes, SHA-256, every tile decoded
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.4          # JSON: climate, soil, regions, extremes, monthly, monthly_precip
+canopi-climate sample points.csv --grid out-v0.4 -o climate.csv
+canopi-climate sample points.csv --grid out-v0.4 --regions --extremes --monthly
+canopi-climate verify-grid out-v0.4                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 
-`lookup` prints `{"climate": …, "extremes": …, "regions": …, "soil": …}`; each part is
+`lookup` prints `{"climate": …, "extremes": …, "monthly": …, "monthly_precip": …, "regions": …, "soil": …}`; each part is
 `null` when absent (exit code 2 when all are). For Paris:
 
 ```json
@@ -149,10 +159,11 @@ canopi-climate sources                                        # source files, UR
 `sample` reads a CSV with `lat`/`latitude` and `lon`/`lng`/`longitude`
 columns (and optionally `id`). It writes one row per point and
 period/scenario; points without data get one row with their status. It
-samples climate only, unless `--regions` (0.2.1) appends the columns
-`wgsrpd_l3` and `iso_a2`: the codes `lookup` gives for the point, repeated
-on each of its rows (empty when no code is near). Without the flag the
-output is byte-identical to 0.2.0.
+samples climate only unless opt-in flags are passed: `--regions` (0.2.1)
+appends `wgsrpd_l3` and `iso_a2`; `--extremes` (0.4.0) appends
+`tmin_extreme_c`, `tmax_extreme_c` and `usda_zone`; `--monthly` (0.4.0)
+appends `gdd_base_10`, `chill_months` and `dry_mask` (blank on slots not
+present in `monthly`). Without flags the output is byte-identical to 0.2.0.
 
 ## Features
 
@@ -178,16 +189,19 @@ download anything.
 ```sh
 cargo build --release --features pipeline
 B=target/release/canopi-climate
-$B build-grid --sources /data/climate --out out-v0.3 --stage verify
-$B build-grid --sources /data/climate --out out-v0.3 --stage koppen
-$B build-grid --sources /data/climate --out out-v0.3 --stage chelsa
-$B build-grid --sources /data/climate --out out-v0.3 --stage beck    # or --beck-period 2041_2070_ssp245 ...
-$B build-grid --sources /data/climate --out out-v0.3 --stage check-future   # optional, needs the 5 CHELSA GCM files
-$B build-grid --sources /data/climate --out out-v0.3 --stage tiles
-$B build-grid --sources /data/climate --out out-v0.3 --stage regions  # 25 s
-$B build-grid --sources /data/climate --out out-v0.3 --stage soil     # 10 s; needs regions (land mask)
-$B build-grid --sources /data/climate --out out-v0.3 --stage extremes # needs the two Earth Engine rasters below
-$B verify-grid out-v0.3
+$B build-grid --sources /data/climate --out out-v0.4 --stage verify
+$B build-grid --sources /data/climate --out out-v0.4 --stage koppen
+$B build-grid --sources /data/climate --out out-v0.4 --stage chelsa
+$B build-grid --sources /data/climate --out out-v0.4 --stage beck    # or --beck-period 2041_2070_ssp245 ...
+$B build-grid --sources /data/climate --out out-v0.4 --stage check-future   # optional, needs the 5 CHELSA GCM files
+$B build-grid --sources /data/climate --out out-v0.4 --stage tiles
+$B build-grid --sources /data/climate --out out-v0.4 --stage regions        # 25 s
+$B build-grid --sources /data/climate --out out-v0.4 --stage soil           # 10 s; needs regions (land mask)
+$B build-grid --sources /data/climate --out out-v0.4 --stage extremes       # needs the two Earth Engine rasters below
+$B build-grid --sources /data/climate --out out-v0.4 --stage chelsa-monthly # 12 CHELSA V2.1 tasmin rasters
+$B build-grid --sources /data/climate --out out-v0.4 --stage monthly        # 0.1° monthly tmean, tmin, dry_mask
+$B build-grid --sources /data/climate --out out-v0.4 --stage monthly-precip # 0.25° monthly precip
+$B verify-grid out-v0.4
 ```
 
 The `extremes` stage reads two rasters computed on Google Earth Engine by
@@ -258,9 +272,9 @@ mask; the next `soil` stage rebuilds it.
   Taiwan TW; Siachen has no code). Gibraltar, Bouvet Island and the US
   Minor Outlying Islands have no unit at 1:50m.
 
-See `docs/validation.md` for a comparison with ERA5 at 22 cities and the
+See `docs/validation.md` for a comparison with ERA5 at 29 cities and the
 site-layer checks, and `docs/decisions/` for design decisions (0003: site
-layers).
+layers, 0004: monthly layers, 0005: annual extremes).
 
 ## Data sources and licences
 
@@ -276,7 +290,7 @@ and their citations go with any use of it (`ATTRIBUTION.md` in each release).
   <https://doi.org/10.6084/m9.figshare.21789074.v2>, licensed **CC BY 4.0**
   there. The authors' GloH2O page links CC BY-NC 4.0 instead. The Canopi
   project has the authors' permission to use the data.
-- **CHELSA V2.1**: bio5, bio6 and bio12 for 1981–2010, licensed **CC0 1.0**.
+- **CHELSA V2.1**: bio5, bio6, bio12 and monthly `tasmin` (months 01–12) for 1981–2010, licensed **CC0 1.0**.
   Karger, D. N., Conrad, O., Böhner, J., Kawohl, T., Kreft, H., Soria-Auza, R. W.,
   Zimmermann, N. E., Linder, H. P., Kessler, M. (2017). Climatologies at high
   resolution for the earth's land surface areas. *Scientific Data* 4, 170122.
@@ -342,8 +356,8 @@ cargo build --target wasm32-unknown-unknown --profile wasm --features wasm
 wasm-bindgen --target nodejs --out-dir pkg-node target/wasm32-unknown-unknown/wasm/canopi_climate.wasm
 node scripts/wasm-smoke.cjs                                      # includes the single-tile synthetic vectors
 cargo deny check bans licenses sources                           # cargo-deny 0.20
-CANOPI_CLIMATE_GRID=out-v0.3 cargo test --release --features pipeline -- --ignored   # against a built grid
-canopi-climate vectors --grid out-v0.3 --points vectors/points.csv --check vectors/lookup.json
+CANOPI_CLIMATE_GRID=out-v0.4 cargo test --release --features pipeline -- --ignored   # against a built grid
+canopi-climate vectors --grid out-v0.4 --points vectors/points.csv --check vectors/lookup.json
 ```
 
 CI tiers:
