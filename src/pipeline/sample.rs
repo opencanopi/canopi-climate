@@ -5,15 +5,17 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::{PipelineError, Result};
-use crate::extremes::ExtremesTile;
+use crate::extremes::{ExtremesLookup, ExtremesTile};
 use crate::grid::TileId;
 use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
 use crate::lookup::{Lookup, lookup_across, search_tiles};
 use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
+use crate::monthly::{MONTHLY_SLOT_INDICES, MonthlyLookup, MonthlyTile};
+use crate::monthly_precip::{MonthlyPrecipLookup, MonthlyPrecipTile, PRECIP_LOOKUP_RADIUS};
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
-use crate::vectors::{ExtremesTiles, Getters, LayerTiles, Site};
+use crate::vectors::{ExtremesTiles, Getters, LayerTiles, MonthlyPrecipTiles, MonthlyTiles, Site};
 
 /// Decoded tiles kept in memory at most (about 1.4 MB each).
 const CACHE_TILES: usize = 96;
@@ -32,6 +34,8 @@ pub struct Grid {
     layer_paths: HashMap<(String, String), String>,
     layer_cache: HashMap<(String, TileId), LayerTile>,
     extremes_cache: HashMap<TileId, ExtremesTile>,
+    monthly_cache: HashMap<TileId, MonthlyTile>,
+    monthly_precip_cache: HashMap<TileId, MonthlyPrecipTile>,
 }
 
 impl Grid {
@@ -74,6 +78,8 @@ impl Grid {
             layer_paths,
             layer_cache: HashMap::new(),
             extremes_cache: HashMap::new(),
+            monthly_cache: HashMap::new(),
+            monthly_precip_cache: HashMap::new(),
         })
     }
 
@@ -153,16 +159,35 @@ impl Grid {
         if extremes {
             self.load_extremes(lat, lon, radius)?;
         }
-        let (cache, layers, ext) = (&self.cache, &self.layer_cache, &self.extremes_cache);
+        let monthly = self.has_layer(crate::monthly::DIR);
+        if monthly {
+            self.load_monthly(lat, lon, radius)?;
+        }
+        let monthly_precip = self.has_layer(crate::monthly_precip::DIR);
+        if monthly_precip {
+            self.load_monthly_precip(lat, lon, PRECIP_LOOKUP_RADIUS)?;
+        }
+        let (cache, layers, ext, mon, mon_p) = (
+            &self.cache,
+            &self.layer_cache,
+            &self.extremes_cache,
+            &self.monthly_cache,
+            &self.monthly_precip_cache,
+        );
         let climate_tiles = |id: TileId| cache.get(&id);
         let soil_tiles = |id: TileId| layers.get(&("soil".to_string(), id));
         let region_tiles = |id: TileId| layers.get(&("regions".to_string(), id));
         let extremes_tiles = |id: TileId| ext.get(&id);
+        let monthly_tiles = |id: TileId| mon.get(&id);
+        let monthly_precip_tiles = |id: TileId| mon_p.get(&id);
         let g = Getters {
             climate: &climate_tiles,
             soil: soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
             regions: regions.then_some(&region_tiles as LayerTiles<'_, '_>),
             extremes: extremes.then_some(&extremes_tiles as ExtremesTiles<'_, '_>),
+            monthly: monthly.then_some(&monthly_tiles as MonthlyTiles<'_, '_>),
+            monthly_precip: monthly_precip
+                .then_some(&monthly_precip_tiles as MonthlyPrecipTiles<'_, '_>),
         };
         crate::vectors::site(g, (lat, lon, radius), own_tile_only)
             .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
@@ -197,6 +222,135 @@ impl Grid {
             self.extremes_cache.insert(t, tile);
         }
         Ok(())
+    }
+
+    /// Decode the monthly tiles the climate search can reach.
+    fn load_monthly(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.monthly_cache.len() + ids.len() > CACHE_TILES {
+            self.monthly_cache.clear();
+        }
+        for t in ids {
+            if self.monthly_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::monthly::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = MonthlyTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.monthly_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    /// Decode the monthly_precip tiles a search of `radius` 0.25-degree cells
+    /// can reach.
+    fn load_monthly_precip(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = crate::monthly_precip::search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.monthly_precip_cache.len() + ids.len() > CACHE_TILES {
+            self.monthly_precip_cache.clear();
+        }
+        for t in ids {
+            if self.monthly_precip_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::monthly_precip::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = MonthlyPrecipTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.monthly_precip_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    /// Extremes at a climate cell (`cell_lat`, `cell_lon`), `Ok(None)` without
+    /// the layer or when the cell has none.
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn extremes_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<ExtremesLookup>> {
+        if !self.has_layer(crate::extremes::DIR) {
+            return Ok(None);
+        }
+        self.load_extremes(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.extremes_cache.get(&id) {
+            Some(tile) => crate::extremes::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Monthly climatology at a climate cell (`cell_lat`, `cell_lon`),
+    /// `Ok(None)` without the layer or when the cell has none.
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn monthly_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<MonthlyLookup>> {
+        if !self.has_layer(crate::monthly::DIR) {
+            return Ok(None);
+        }
+        self.load_monthly(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.monthly_cache.get(&id) {
+            Some(tile) => crate::monthly::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Monthly precipitation at a point (0.25-degree grid, searching up to
+    /// `radius` cells across tiles).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn monthly_precip(
+        &mut self,
+        lat: f64,
+        lon: f64,
+        radius: usize,
+    ) -> Result<Option<MonthlyPrecipLookup>> {
+        if !self.has_layer(crate::monthly_precip::DIR) {
+            return Ok(None);
+        }
+        self.load_monthly_precip(lat, lon, radius)?;
+        let cache = &self.monthly_precip_cache;
+        crate::monthly_precip::lookup_across(|t| cache.get(&t), lat, lon, radius)
+            .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
     }
 
     /// The grid directory.
@@ -293,6 +447,10 @@ impl Grid {
         let layer_tiles = self.manifest.layers.iter().flat_map(|l| {
             let kind = if l.id == crate::extremes::DIR {
                 Kind::Extremes
+            } else if l.id == crate::monthly::DIR {
+                Kind::Monthly
+            } else if l.id == crate::monthly_precip::DIR {
+                Kind::MonthlyPrecip
             } else {
                 Kind::Layer(l.bands.len())
             };
@@ -332,6 +490,8 @@ enum Kind {
     /// A 0.05-degree site layer with this many bands.
     Layer(usize),
     Extremes,
+    Monthly,
+    MonthlyPrecip,
 }
 
 /// Why a tile file does not decode as the tile `name` (`None`: it does).
@@ -340,6 +500,8 @@ fn decode_problem(bytes: &[u8], kind: Kind, name: &str) -> Option<String> {
         Kind::Climate => Tile::decode(bytes).map(|t| t.id()),
         Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| t.id()),
         Kind::Extremes => ExtremesTile::decode(bytes).map(|t| t.id()),
+        Kind::Monthly => MonthlyTile::decode(bytes).map(|t| t.id()),
+        Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes).map(|t| t.id()),
     };
     match id {
         Err(e) => Some(e.to_string()),
@@ -393,6 +555,53 @@ fn column(headers: &csv::StringRecord, names: &[&str]) -> Option<usize> {
 /// Columns `--regions` appends to every row.
 pub const REGION_COLUMNS: [&str; 2] = ["wgsrpd_l3", "iso_a2"];
 
+/// Columns `--extremes` appends to every row.
+pub const EXTREMES_COLUMNS: [&str; 3] = ["tmin_extreme_c", "tmax_extreme_c", "usda_zone"];
+
+/// Columns `--monthly` appends to every row (populated for the 3 monthly
+/// slots; empty for other slots and no-data/invalid rows).
+pub const MONTHLY_COLUMNS: [&str; 39] = [
+    "tmean_01_c",
+    "tmean_02_c",
+    "tmean_03_c",
+    "tmean_04_c",
+    "tmean_05_c",
+    "tmean_06_c",
+    "tmean_07_c",
+    "tmean_08_c",
+    "tmean_09_c",
+    "tmean_10_c",
+    "tmean_11_c",
+    "tmean_12_c",
+    "tmin_01_c",
+    "tmin_02_c",
+    "tmin_03_c",
+    "tmin_04_c",
+    "tmin_05_c",
+    "tmin_06_c",
+    "tmin_07_c",
+    "tmin_08_c",
+    "tmin_09_c",
+    "tmin_10_c",
+    "tmin_11_c",
+    "tmin_12_c",
+    "dry_mask",
+    "gdd_base_10",
+    "chill_months",
+    "precip_01_mm",
+    "precip_02_mm",
+    "precip_03_mm",
+    "precip_04_mm",
+    "precip_05_mm",
+    "precip_06_mm",
+    "precip_07_mm",
+    "precip_08_mm",
+    "precip_09_mm",
+    "precip_10_mm",
+    "precip_11_mm",
+    "precip_12_mm",
+];
+
 /// How [`sample_csv_with`] samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SampleOptions {
@@ -403,6 +612,14 @@ pub struct SampleOptions {
     /// [`LAYER_LOOKUP_RADIUS`] layer cells), on each of its rows; empty
     /// when no code is near or the coordinates are invalid.
     pub regions: bool,
+    /// Append [`EXTREMES_COLUMNS`]: `tmin_extreme_c`, `tmax_extreme_c`,
+    /// `usda_zone` at the climate lookup's cell (needs the `extremes` layer).
+    pub extremes: bool,
+    /// Append [`MONTHLY_COLUMNS`]: 12-month `tmean`, `tmin`, `dry_mask`,
+    /// `gdd_base_10`, `chill_months`, and 12-month `precip_mm` for the 3
+    /// monthly slots (needs the `monthly` layer; `monthly_precip` used when
+    /// present).
+    pub monthly: bool,
 }
 
 /// Sample a CSV of points (header with `lat`/`latitude` and
@@ -420,26 +637,24 @@ pub fn sample_csv(
     let opts = SampleOptions {
         radius,
         regions: false,
+        extremes: false,
+        monthly: false,
     };
     sample_csv_with(grid, input, output, &opts)
 }
 
-/// [`sample_csv`] with options. Without [`SampleOptions::regions`] the
-/// output is the same as `sample_csv`'s.
+/// [`sample_csv`] with options. Without any optional flag (`regions`,
+/// `extremes`, `monthly`) the output is byte-identical to `sample_csv`'s.
 ///
 /// # Errors
-/// As [`sample_csv`]; with `regions`, a grid without the regions layer.
+/// As [`sample_csv`]; or a missing layer required by an enabled flag.
 pub fn sample_csv_with(
     grid: &mut Grid,
     input: impl Read,
     output: impl Write,
     opts: &SampleOptions,
 ) -> Result<SampleSummary> {
-    if opts.regions && !grid.has_layer("regions") {
-        return Err(PipelineError::Data(
-            "--regions: the grid has no regions layer (canopi-climate 0.2 or later)".into(),
-        ));
-    }
+    check_sample_layers(grid, opts)?;
     let csv_err = |e: csv::Error| PipelineError::Data(e.to_string());
     let mut rdr = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
@@ -454,6 +669,12 @@ pub fn sample_csv_with(
     let mut header = OUT_HEADER.to_vec();
     if opts.regions {
         header.extend(REGION_COLUMNS);
+    }
+    if opts.extremes {
+        header.extend(EXTREMES_COLUMNS);
+    }
+    if opts.monthly {
+        header.extend(MONTHLY_COLUMNS);
     }
     w.write_record(&header).map_err(csv_err)?;
     let mut summary = SampleSummary::default();
@@ -473,7 +694,7 @@ pub fn sample_csv_with(
         let coords = lat_s.parse::<f64>().ok().zip(lon_s.parse::<f64>().ok());
         let Some((lat, lon)) = coords.filter(|&(lat, lon)| TileId::of(lat, lon).is_some()) else {
             summary.invalid += 1;
-            write_status(&mut w, &point, "invalid", opts.regions.then(Codes::default))?;
+            write_status(&mut w, &point, "invalid", opts, None)?;
             continue;
         };
         let codes = if opts.regions {
@@ -484,16 +705,36 @@ pub fn sample_csv_with(
         match grid.lookup(lat, lon, opts.radius)? {
             None => {
                 summary.no_data += 1;
-                write_status(&mut w, &point, "no_data", codes)?;
+                write_status(&mut w, &point, "no_data", opts, codes.as_ref())?;
             }
             Some(f) => {
                 summary.ok += 1;
-                write_rows(&mut w, &point, &f, codes.as_ref())?;
+                let extras = load_row_extras(grid, &f, lat, lon, opts, codes)?;
+                write_rows(&mut w, &point, &f, opts, &extras)?;
             }
         }
     }
     w.flush().map_err(|e| PipelineError::Data(e.to_string()))?;
     Ok(summary)
+}
+
+fn check_sample_layers(grid: &Grid, opts: &SampleOptions) -> Result<()> {
+    if opts.regions && !grid.has_layer("regions") {
+        return Err(PipelineError::Data(
+            "--regions: the grid has no regions layer (canopi-climate 0.2 or later)".into(),
+        ));
+    }
+    if opts.extremes && !grid.has_layer(crate::extremes::DIR) {
+        return Err(PipelineError::Data(
+            "--extremes: the grid has no extremes layer (canopi-climate 0.3 or later)".into(),
+        ));
+    }
+    if opts.monthly && !grid.has_layer(crate::monthly::DIR) {
+        return Err(PipelineError::Data(
+            "--monthly: the grid has no monthly layer (canopi-climate 0.4 or later)".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A point as read (coordinates kept as written).
@@ -510,6 +751,43 @@ struct Codes {
     iso_a2: String,
 }
 
+/// Optional per-point layer lookups loaded when flags are set.
+struct RowExtras {
+    codes: Option<Codes>,
+    extremes: Option<ExtremesLookup>,
+    monthly: Option<MonthlyLookup>,
+    monthly_precip: Option<MonthlyPrecipLookup>,
+}
+
+fn load_row_extras(
+    grid: &mut Grid,
+    f: &Lookup,
+    lat: f64,
+    lon: f64,
+    opts: &SampleOptions,
+    codes: Option<Codes>,
+) -> Result<RowExtras> {
+    let extremes = if opts.extremes {
+        grid.extremes_at_cell(f.cell_lat, f.cell_lon)?
+    } else {
+        None
+    };
+    let (monthly, monthly_precip) = if opts.monthly {
+        (
+            grid.monthly_at_cell(f.cell_lat, f.cell_lon)?,
+            grid.monthly_precip(lat, lon, PRECIP_LOOKUP_RADIUS)?,
+        )
+    } else {
+        (None, None)
+    };
+    Ok(RowExtras {
+        codes,
+        extremes,
+        monthly,
+        monthly_precip,
+    })
+}
+
 fn region_codes(grid: &mut Grid, lat: f64, lon: f64) -> Result<Codes> {
     let r = grid.regions(lat, lon, LAYER_LOOKUP_RADIUS)?;
     Ok(r.map_or_else(Codes::default, |r| Codes {
@@ -522,24 +800,67 @@ fn write_status<W: Write>(
     w: &mut csv::Writer<W>,
     p: &Point<'_>,
     status: &str,
-    codes: Option<Codes>,
+    opts: &SampleOptions,
+    codes: Option<&Codes>,
 ) -> Result<()> {
     let mut row = vec![p.id, p.lat, p.lon, status];
     row.resize(OUT_HEADER.len(), "");
-    if let Some(c) = &codes {
-        row.extend([c.wgsrpd_l3.as_str(), c.iso_a2.as_str()]);
+    if opts.regions {
+        match codes {
+            Some(c) => row.extend([c.wgsrpd_l3.as_str(), c.iso_a2.as_str()]),
+            None => row.extend(["", ""]),
+        }
+    }
+    if opts.extremes {
+        row.extend(std::iter::repeat_n("", EXTREMES_COLUMNS.len()));
+    }
+    if opts.monthly {
+        row.extend(std::iter::repeat_n("", MONTHLY_COLUMNS.len()));
     }
     w.write_record(&row)
         .map_err(|e| PipelineError::Data(e.to_string()))
+}
+
+fn append_monthly_cols(
+    row: &mut Vec<String>,
+    slot_idx: usize,
+    monthly: Option<&MonthlyLookup>,
+    monthly_precip: Option<&MonthlyPrecipLookup>,
+) {
+    let Some(ms) = MONTHLY_SLOT_INDICES.iter().position(|&s| s == slot_idx) else {
+        row.extend(std::iter::repeat_n(String::new(), MONTHLY_COLUMNS.len()));
+        return;
+    };
+    if let Some(p) = monthly.and_then(|m| m.periods.get(ms)) {
+        for v in p.tmean_c {
+            row.push(format!("{v:.1}"));
+        }
+        for v in p.tmin_c {
+            row.push(format!("{v:.1}"));
+        }
+        row.push(p.dry_mask.to_string());
+        row.push(format!("{:.1}", p.gdd_base_10));
+        row.push(p.chill_months.to_string());
+    } else {
+        row.extend(std::iter::repeat_n(String::new(), 27));
+    }
+    if let Some(p) = monthly_precip.and_then(|mp| mp.periods.get(ms)) {
+        for v in p.precip_mm {
+            row.push(format!("{v:.0}"));
+        }
+    } else {
+        row.extend(std::iter::repeat_n(String::new(), 12));
+    }
 }
 
 fn write_rows<W: Write>(
     w: &mut csv::Writer<W>,
     pt: &Point<'_>,
     f: &Lookup,
-    codes: Option<&Codes>,
+    opts: &SampleOptions,
+    extras: &RowExtras,
 ) -> Result<()> {
-    for p in &f.periods {
+    for (slot_idx, p) in f.periods.iter().enumerate() {
         let mut row = vec![
             pt.id.to_string(),
             pt.lat.to_string(),
@@ -563,8 +884,31 @@ fn write_rows<W: Write>(
             p.dry_months.to_string(),
             f.tile.clone(),
         ];
-        if let Some(c) = codes {
+        if let Some(c) = &extras.codes {
             row.extend([c.wgsrpd_l3.clone(), c.iso_a2.clone()]);
+        }
+        if opts.extremes {
+            if let Some(ep) = extras
+                .extremes
+                .as_ref()
+                .and_then(|e| e.periods.get(slot_idx))
+            {
+                row.extend([
+                    format!("{:.1}", ep.tmin_extreme_c),
+                    format!("{:.1}", ep.tmax_extreme_c),
+                    ep.usda_zone.clone(),
+                ]);
+            } else {
+                row.extend(std::iter::repeat_n(String::new(), EXTREMES_COLUMNS.len()));
+            }
+        }
+        if opts.monthly {
+            append_monthly_cols(
+                &mut row,
+                slot_idx,
+                extras.monthly.as_ref(),
+                extras.monthly_precip.as_ref(),
+            );
         }
         w.write_record(&row)
             .map_err(|e| PipelineError::Data(e.to_string()))?;
@@ -658,6 +1002,8 @@ mod tests {
         let opts = SampleOptions {
             radius: 2,
             regions: true,
+            extremes: false,
+            monthly: false,
         };
         let mut out = Vec::new();
         let s = sample_csv_with(&mut g, SAMPLE_POINTS.as_bytes(), &mut out, &opts).unwrap();
@@ -768,5 +1114,141 @@ mod tests {
         let dir = grid_dir("nocoords");
         let mut g = Grid::open(&dir).unwrap();
         assert!(sample_csv(&mut g, "x,y\n1,2\n".as_bytes(), Vec::new(), 2).is_err());
+    }
+
+    fn grid_dir_with_all_layers(name: &str) -> PathBuf {
+        let dir = grid_dir_with_regions(name);
+        let path = dir.join("manifest.json");
+        let mut m: Manifest =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        std::fs::create_dir_all(dir.join("extremes")).unwrap();
+        let et = crate::extremes::synthetic::extremes();
+        let rel = format!("extremes/{}", et.id().file_name());
+        let bytes = cog::write_extremes_tile_checked(&et, &dir.join(&rel)).unwrap();
+        let espec = crate::manifest::TileSpec {
+            name: et.id().name(),
+            path: rel,
+            bytes: bytes.len() as u64,
+            sha256: crate::pipeline::sha256_bytes(&bytes),
+            complete_cells: et.cells() as u32,
+        };
+        m.layers
+            .push(crate::pipeline::extremes::layer_spec(vec![espec]));
+
+        std::fs::create_dir_all(dir.join("monthly")).unwrap();
+        let mt = crate::monthly::synthetic::monthly();
+        let rel = format!("monthly/{}", mt.id().file_name());
+        let bytes = cog::write_monthly_tile_checked(&mt, &dir.join(&rel)).unwrap();
+        let mspec = crate::manifest::TileSpec {
+            name: mt.id().name(),
+            path: rel,
+            bytes: bytes.len() as u64,
+            sha256: crate::pipeline::sha256_bytes(&bytes),
+            complete_cells: mt.cells() as u32,
+        };
+        m.layers
+            .push(crate::pipeline::monthly::layer_spec(vec![mspec]));
+
+        std::fs::create_dir_all(dir.join("monthly_precip")).unwrap();
+        let mpt = crate::monthly_precip::synthetic::monthly_precip();
+        let rel = format!("monthly_precip/{}", mpt.id().file_name());
+        let bytes = cog::write_monthly_precip_tile_checked(&mpt, &dir.join(&rel)).unwrap();
+        let mpspec = crate::manifest::TileSpec {
+            name: mpt.id().name(),
+            path: rel,
+            bytes: bytes.len() as u64,
+            sha256: crate::pipeline::sha256_bytes(&bytes),
+            complete_cells: mpt.cells() as u32,
+        };
+        m.layers
+            .push(crate::pipeline::monthly_precip::layer_spec(vec![mpspec]));
+
+        std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn csv_sampling_with_extremes_and_monthly_flags() {
+        let dir = grid_dir_with_all_layers("all-layers");
+        let mut g = Grid::open(&dir).unwrap();
+        assert!(g.verify().unwrap().is_empty());
+
+        // Default output (all flags false) stays byte-identical to v0.2.0/v0.3.0 golden.
+        let golden = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-v0.2.0.csv"),
+        )
+        .unwrap();
+        let mut default_out = Vec::new();
+        sample_csv(&mut g, SAMPLE_POINTS.as_bytes(), &mut default_out, 2).unwrap();
+        assert_eq!(String::from_utf8(default_out).unwrap(), golden);
+
+        // With --extremes and --monthly enabled:
+        let opts = SampleOptions {
+            radius: 2,
+            regions: false,
+            extremes: true,
+            monthly: true,
+        };
+        let mut out = Vec::new();
+        let input = "id,lat,lon\ninland,45.95,5.05\nsea,49.5,9.5\n";
+        let s = sample_csv_with(&mut g, input.as_bytes(), &mut out, &opts).unwrap();
+        assert_eq!((s.points, s.ok, s.no_data, s.invalid), (2, 1, 1, 0));
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let expected_cols = OUT_HEADER.len() + EXTREMES_COLUMNS.len() + MONTHLY_COLUMNS.len();
+        assert_eq!(lines[0].split(',').count(), expected_cols);
+        // Slot 0 (1991-2020 historical) has both extremes and monthly populated.
+        let slot0: Vec<&str> = lines[1].split(',').collect();
+        assert_eq!(slot0.len(), expected_cols);
+        assert!(!slot0[20].is_empty(), "tmin_extreme_c populated");
+        assert!(!slot0[22].is_empty(), "usda_zone populated");
+        assert!(!slot0[23].is_empty(), "tmean_01_c populated");
+        assert!(
+            !slot0[expected_cols - 1].is_empty(),
+            "precip_12_mm populated"
+        );
+        // Slot 1 (2041-2070 ssp126) has extremes populated but monthly empty.
+        let slot1: Vec<&str> = lines[2].split(',').collect();
+        assert!(!slot1[20].is_empty(), "extremes populated on ssp126");
+        assert!(slot1[23].is_empty(), "monthly empty on ssp126");
+        // Slot 2 (2041-2070 ssp245) has monthly populated.
+        let slot2: Vec<&str> = lines[3].split(',').collect();
+        assert!(!slot2[23].is_empty(), "monthly populated on ssp245");
+        // Sea row has the right column count with empty extras.
+        let sea: Vec<&str> = lines[10].split(',').collect();
+        assert_eq!(sea.len(), expected_cols);
+        assert_eq!(sea[3], "no_data");
+
+        // Missing layers error cleanly.
+        let mut plain = Grid::open(&grid_dir("plain-flags")).unwrap();
+        assert!(
+            sample_csv_with(
+                &mut plain,
+                input.as_bytes(),
+                Vec::new(),
+                &SampleOptions {
+                    radius: 2,
+                    regions: false,
+                    extremes: true,
+                    monthly: false,
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            sample_csv_with(
+                &mut plain,
+                input.as_bytes(),
+                Vec::new(),
+                &SampleOptions {
+                    radius: 2,
+                    regions: false,
+                    extremes: false,
+                    monthly: true,
+                }
+            )
+            .is_err()
+        );
     }
 }

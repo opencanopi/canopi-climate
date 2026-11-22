@@ -38,6 +38,8 @@ pub enum Stage {
     Koppen,
     /// CHELSA means per cell.
     Chelsa,
+    /// CHELSA V2.1 monthly tasmin means per cell.
+    ChelsaMonthly,
     /// Beck monthly climatologies to per-cell summaries.
     Beck,
     /// Assemble, write tiles, manifest and report.
@@ -48,20 +50,27 @@ pub enum Stage {
     Soil,
     /// Layer: coldest night and hottest day per slot (after `tiles`).
     Extremes,
+    /// Layer: monthly tmean, tmin, dry_mask for 3 slots (after `tiles` and `chelsa-monthly`).
+    Monthly,
+    /// Layer: 0.25-degree monthly precipitation for 3 slots (after `tiles`).
+    MonthlyPrecip,
     /// Compare the delta method with CHELSA's own projections.
     CheckFuture,
 }
 
 /// Stages run by default, in order.
-pub const DEFAULT_STAGES: [Stage; 8] = [
+pub const DEFAULT_STAGES: [Stage; 11] = [
     Stage::Verify,
     Stage::Koppen,
     Stage::Chelsa,
+    Stage::ChelsaMonthly,
     Stage::Beck,
     Stage::Tiles,
     Stage::Regions,
     Stage::Soil,
     Stage::Extremes,
+    Stage::Monthly,
+    Stage::MonthlyPrecip,
 ];
 
 /// Build settings.
@@ -96,7 +105,7 @@ pub fn slot_key(slot: Slot) -> String {
 }
 
 /// Source sub-path of a slot, e.g. `1991_2020`, `2041_2070/ssp245`.
-fn slot_dir(key: &str) -> String {
+pub(super) fn slot_dir(key: &str) -> String {
     match key.split_once("_ssp") {
         Some((p, s)) => format!("{p}/ssp{s}"),
         None => key.to_string(),
@@ -155,11 +164,14 @@ pub fn run(cfg: &BuildConfig, stages: &[Stage]) -> Result<()> {
             Stage::Verify => stage_verify(cfg)?,
             Stage::Koppen => stage_koppen(cfg)?,
             Stage::Chelsa => stage_chelsa(cfg)?,
+            Stage::ChelsaMonthly => super::monthly::stage_chelsa_monthly(cfg)?,
             Stage::Beck => stage_beck(cfg)?,
             Stage::Tiles => super::assemble::stage_tiles(cfg)?,
             Stage::Regions => super::regions::stage_regions(cfg)?,
             Stage::Soil => super::soil::stage_soil(cfg)?,
             Stage::Extremes => super::extremes::stage_extremes(cfg)?,
+            Stage::Monthly => super::monthly::stage_monthly(cfg)?,
+            Stage::MonthlyPrecip => super::monthly_precip::stage_monthly_precip(cfg)?,
             Stage::CheckFuture => stage_check_future(cfg)?,
         }
         eprintln!(
@@ -363,6 +375,49 @@ pub(super) fn grid_orientation(lat: &[f64], lon: &[f64]) -> std::result::Result<
             lat.first()
         ))
     }
+}
+
+/// Read one 12-month variable (`air_temperature` or `precipitation`) from a
+/// Beck 0.1-degree NetCDF, oriented north-up (`12 * GRID_H * GRID_W`), with
+/// invalid/fill values replaced by `f32::NAN`.
+pub(super) fn read_beck_monthly_var(nc: &Path, var_name: &str) -> Result<Vec<f32>> {
+    let vars = list_vars(nc)?;
+    let find = |name: &str| {
+        vars.iter()
+            .find(|v| v.name == name)
+            .ok_or_else(|| PipelineError::NetCdf(format!("{}: no {name}", nc.display())))
+    };
+    let var = find(var_name)?;
+    let lat = read_vector_f64(nc, find("lat")?)?;
+    let lon = read_vector_f64(nc, find("lon")?)?;
+    let south_up = grid_orientation(&lat, &lon)
+        .map_err(|e| PipelineError::NetCdf(format!("{}: {e}", nc.display())))?;
+    let n = GRID_W * GRID_H;
+    if var.dims != [12, GRID_H as u64, GRID_W as u64] {
+        return Err(PipelineError::NetCdf(format!(
+            "{}: dims {:?}",
+            var.name, var.dims
+        )));
+    }
+    let raw = read_var_f32(nc, var)?;
+    let fill = var.fill;
+    let valid = |x: f32| x.is_finite() && Some(x) != fill && x.abs() < 1e6;
+    let mut out = vec![f32::NAN; 12 * n];
+    for m in 0..12 {
+        let off = m * n;
+        for r in 0..GRID_H {
+            let src_row = if south_up { GRID_H - 1 - r } else { r };
+            let dst_base = off + r * GRID_W;
+            let src_base = off + src_row * GRID_W;
+            for c in 0..GRID_W {
+                let v = raw[src_base + c];
+                if valid(v) {
+                    out[dst_base + c] = v;
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Per-cell summaries of a Beck monthly NetCDF, north-up rows.

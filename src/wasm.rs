@@ -130,6 +130,51 @@ pub fn usda_zone_js(tmin_extreme_c: f64) -> String {
     crate::extremes::usda_zone(tmin_extreme_c)
 }
 
+/// Decode a `monthly` tile and read the cell holding (`cellLat`, `cellLon`):
+/// pass the climate lookup's `cell_lat` and `cell_lon`. Returns the
+/// [`crate::monthly::MonthlyLookup`] as a plain object (`periods[]` with
+/// `tmean_c`, `tmin_c`, `dry_mask`, `dry_months`, `gdd_base_10`,
+/// `chill_months`), or `null` when that cell has no data.
+///
+/// # Errors
+/// Throws when the bytes are not a monthly tile, the coordinate is invalid
+/// or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupMonthly)]
+pub fn lookup_monthly_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::monthly::MonthlyTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::monthly::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Decode a `monthly_precip` tile (0.25-degree grid) and look a point up
+/// (own cell, else nearest valid cell within radius 1 for coastal fallback).
+/// Returns the [`crate::monthly_precip::MonthlyPrecipLookup`] as a plain
+/// object (`periods[]` with `precip_mm`), or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a monthly_precip tile, the coordinate is
+/// invalid or the point lies in another tile.
+#[wasm_bindgen(js_name = lookupMonthlyPrecip)]
+pub fn lookup_monthly_precip_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result<JsValue, JsError> {
+    let tile = crate::monthly_precip::MonthlyPrecipTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::monthly_precip::lookup(&tile, lat, lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 /// Crate version, for logs and cache keys.
 #[wasm_bindgen(js_name = version)]
 #[must_use]

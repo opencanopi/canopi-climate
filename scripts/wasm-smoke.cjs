@@ -63,6 +63,26 @@ assert.equal(ext.periods[0].usda_zone, cc.usdaZone(ext.periods[0].tmin_extreme_c
 assert.equal(cc.usdaZone(-8.4), "8b");
 assert.throws(() => cc.lookupExtremes(extBytes, 10, 10)); // wrong tile
 assert.throws(() => cc.lookupExtremes(bytes, r.cell_lat, r.cell_lon)); // a climate tile
+const monBytes = fixture("synthetic-monthly-n50e000.tif");
+const mon = cc.lookupMonthly(monBytes, r.cell_lat, r.cell_lon);
+assert.equal(mon.tile, "n50e000");
+assert.equal(mon.periods.length, 3);
+assert.equal(mon.periods[0].tmean_c.length, 12);
+assert.equal(mon.periods[0].tmin_c.length, 12);
+assert.equal(typeof mon.periods[0].gdd_base_10, "number");
+assert.equal(typeof mon.periods[0].chill_months, "number");
+assert.throws(() => cc.lookupMonthly(monBytes, 10, 10)); // wrong tile
+assert.throws(() => cc.lookupMonthly(bytes, r.cell_lat, r.cell_lon)); // climate tile
+const monPBytes = fixture("synthetic-monthly-precip-n50e000.tif");
+const monP = cc.lookupMonthlyPrecip(monPBytes, 45.95, 5.05);
+assert.equal(monP.tile, "n50e000");
+assert.equal(monP.distance_cells, 0);
+assert.equal(monP.periods.length, 3);
+assert.equal(monP.periods[0].precip_mm.length, 12);
+const monPCoast = cc.lookupMonthlyPrecip(monPBytes, 47.125, 5.125);
+assert.equal(monPCoast.distance_cells, 1);
+assert.equal(cc.lookupMonthlyPrecip(monPBytes, 49.5, 9.5), null); // far ocean
+assert.throws(() => cc.lookupMonthlyPrecip(monPBytes, 10, 10)); // wrong tile
 assert.equal(cc.textureClass(40, 20), "loam");
 assert.equal(cc.textureClass(70, 40), undefined);
 
@@ -83,9 +103,13 @@ for (const p of vectors.points) {
     climate: own ? cc.lookup(bytes, p.lat, p.lon) : null,
     soil: own ? cc.lookupSoil(soilBytes, p.lat, p.lon) : null,
     regions: own ? cc.lookupRegions(regionsBytes, p.lat, p.lon) : null,
+    monthly_precip: own ? cc.lookupMonthlyPrecip(monPBytes, p.lat, p.lon) : null,
   };
   got.extremes = got.climate ? cc.lookupExtremes(extBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
+  got.monthly = got.climate ? cc.lookupMonthly(monBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   assert.deepStrictEqual(got.extremes, p.expect.extremes, `${p.name}: extremes`);
+  assert.deepStrictEqual(got.monthly, p.expect.monthly, `${p.name}: monthly`);
+  assert.deepStrictEqual(got.monthly_precip, p.expect.monthly_precip, `${p.name}: monthly_precip`);
   assert.deepStrictEqual(got.climate, p.expect.climate, `${p.name}: climate`);
   assert.deepStrictEqual(got.soil, p.expect.soil, `${p.name}: soil`);
   if (own) assert.deepStrictEqual(got.regions, p.expect.regions, `${p.name}: regions`);

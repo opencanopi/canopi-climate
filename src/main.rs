@@ -35,8 +35,9 @@ enum Command {
         /// Work directory for intermediates (default: `<out>/../work-<out name>`).
         #[arg(long)]
         work: Option<PathBuf>,
-        /// Stages to run (repeatable); default: verify, koppen, chelsa, beck,
-        /// tiles, regions, soil, extremes.
+        /// Stages to run (repeatable); default: verify, koppen, chelsa,
+        /// chelsa-monthly, beck, tiles, regions, soil, extremes, monthly,
+        /// monthly-precip.
         #[arg(long = "stage", value_enum)]
         stages: Vec<Stage>,
         /// Only these Beck periods in the `beck` stage (e.g. 1991_2020, 2041_2070_ssp245).
@@ -75,9 +76,19 @@ enum Command {
         /// regions layer). Without it the output is unchanged.
         #[arg(long)]
         regions: bool,
+        /// Append tmin_extreme_c, tmax_extreme_c, usda_zone (needs the
+        /// extremes layer). Without it the output is unchanged.
+        #[arg(long)]
+        extremes: bool,
+        /// Append monthly tmean, tmin, dry_mask, gdd_base_10, chill_months
+        /// and monthly precip columns for the 3 monthly slots (needs the
+        /// monthly layer). Without it the output is unchanged.
+        #[arg(long)]
+        monthly: bool,
     },
-    /// Look one point up and print JSON: `climate`, `extremes`, `soil` and
-    /// `regions` (each `null` when absent; exit code 2 when all are).
+    /// Look one point up and print JSON: `climate`, `extremes`, `monthly`,
+    /// `monthly_precip`, `soil` and `regions` (each `null` when absent;
+    /// exit code 2 when all are).
     Lookup {
         /// Latitude (degrees north).
         #[arg(allow_hyphen_values = true)]
@@ -168,11 +179,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             output,
             radius,
             regions,
+            extremes,
+            monthly,
         } => sample(
             &points,
             &grid,
             output.as_deref(),
-            &SampleOptions { radius, regions },
+            &SampleOptions {
+                radius,
+                regions,
+                extremes,
+                monthly,
+            },
         ),
         Command::Lookup {
             lat,

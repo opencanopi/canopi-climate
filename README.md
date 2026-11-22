@@ -99,7 +99,10 @@ println!("{:?} {:?}", r.wgsrpd_l3, r.iso_a2);              // Some("FRA") Some("
 ### JavaScript (WebAssembly)
 
 ```js
-import init, { tileName, lookup, lookupSoil, lookupRegions, lookupExtremes, textureClass } from "./pkg/canopi_climate.js";
+import init, {
+  tileName, lookup, lookupSoil, lookupRegions, lookupExtremes,
+  lookupMonthly, lookupMonthlyPrecip, textureClass,
+} from "./pkg/canopi_climate.js";
 await init();
 const name = tileName(lat, lon);                    // "n50e000.tif", or undefined
 const get = async (dir) => {                        // 404: the layer has no data in the tile
@@ -110,9 +113,13 @@ const tiles = await get("tiles"), soilTile = await get("soil"), regionsTile = aw
 const climate = tiles ? lookup(tiles, lat, lon) : null;
 const soil = soilTile ? lookupSoil(soilTile, lat, lon) : null;
 const regions = regionsTile ? lookupRegions(regionsTile, lat, lon) : null;  // { wgsrpd_l3, iso_a2, ... }
-// Extremes have no search of their own: read them at the climate answer's cell.
+// Extremes and monthly have no search of their own: read them at the climate answer's cell.
 const extremesTile = climate ? await get("extremes") : null;
 const extremes = extremesTile ? lookupExtremes(extremesTile, climate.cell_lat, climate.cell_lon) : null;
+const monthlyTile = climate ? await get("monthly") : null;
+const monthly = monthlyTile ? lookupMonthly(monthlyTile, climate.cell_lat, climate.cell_lon) : null;
+const precipTile = await get("monthly_precip");
+const monthlyPrecip = precipTile ? lookupMonthlyPrecip(precipTile, lat, lon) : null;
 ```
 
 The results are plain objects with the fields of `Lookup` (`koppen`,
@@ -151,9 +158,9 @@ output is byte-identical to 0.2.0.
 
 | Feature | Contents |
 |---|---|
-| default | grid geometry, tile decoding (`tiff` crate, Deflate only), lookup, Köppen classifier, derived measures, soil and regions lookups, texture classes, manifest types |
-| `pipeline` | grid builder and CLI: windowed GeoTIFF reading on `wbgeotiff`, NetCDF/HDF5 on `wbhdf`, Homolosine on `proj4rs`, polygons on `geo`/`geojson`, pinned sources, aggregation, COG writer, sampling |
-| `wasm` | `wasm-bindgen` exports: `tileName`, `lookup`, `lookupSoil`, `lookupRegions`, `lookupExtremes`, `usdaZone`, `textureClass`, `version` |
+| default | grid geometry, tile decoding (`tiff` crate, Deflate only), lookup, Köppen classifier, derived measures (Thornthwaite PET, Gaussen dry mask, GDD base 10 °C, chill months), extremes, monthly, monthly_precip, soil and regions lookups, texture classes, manifest types |
+| `pipeline` | grid builder and CLI: windowed GeoTIFF reading on `wbgeotiff`, NetCDF/HDF5 on `wbhdf`, Homolosine on `proj4rs`, polygons on `geo`/`geojson`, pinned sources, aggregation, COG writer, sampling (`--regions`, `--extremes`, `--monthly`) |
+| `wasm` | `wasm-bindgen` exports: `tileName`, `lookup`, `lookupSoil`, `lookupRegions`, `lookupExtremes`, `lookupMonthly`, `lookupMonthlyPrecip`, `usdaZone`, `textureClass`, `version` |
 
 There are no C libraries, no GDAL and no HTTP client: the crate does not
 download anything.

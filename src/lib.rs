@@ -30,6 +30,8 @@ pub mod layer;
 pub mod lookup;
 pub mod manifest;
 pub mod model;
+pub mod monthly;
+pub mod monthly_precip;
 pub mod raster;
 pub mod regions;
 pub mod soil;

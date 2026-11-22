@@ -91,6 +91,39 @@ pub fn dry_month_mask(t: &[f32; 12], p: &[f32; 12]) -> Option<i16> {
     Some(mask)
 }
 
+/// Annual growing degree-days above 10 °C (°C·day), approximated from 12
+/// monthly mean temperatures (°C) weighted by mean days per month
+/// (`[31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]`):
+/// `sum_m max(0, tmean[m] - 10) * days[m]`.
+///
+/// Returns `None` if any monthly mean is non-finite.
+#[must_use]
+pub fn gdd_base_10(tmean: &[f64; 12]) -> Option<f64> {
+    if tmean.iter().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let sum: f64 = tmean
+        .iter()
+        .zip(DAYS_IN_MONTH)
+        .map(|(&t, days)| (t - 10.0).max(0.0) * days)
+        .sum();
+    Some(sum)
+}
+
+/// Horticultural chill-month count from 12 monthly mean temperatures (°C):
+/// number of months with `0.0 < tmean[m] <= 7.2` (the 0–7.2 °C / 32–45 °F
+/// effective chilling band).
+///
+/// Returns `None` if any monthly mean is non-finite.
+#[must_use]
+pub fn chill_months(tmean: &[f64; 12]) -> Option<u8> {
+    if tmean.iter().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let count = tmean.iter().filter(|&&t| t > 0.0 && t <= 7.2).count();
+    u8::try_from(count).ok()
+}
+
 impl MonthlySummary {
     /// Summarise 12 monthly means at a latitude; `None` if any value is not
     /// finite.
@@ -176,5 +209,30 @@ mod tests {
         let mut t = [10.0; 12];
         t[0] = f32::NAN;
         assert_eq!(MonthlySummary::new(&t, &[10.0; 12], 0.0), None);
+    }
+
+    #[test]
+    fn gdd_base_10_and_chill_months_cover_edge_cases() {
+        // Uniform 10 °C: 0 GDD, 0 chill months.
+        assert_eq!(gdd_base_10(&[10.0; 12]), Some(0.0));
+        assert_eq!(chill_months(&[10.0; 12]), Some(0));
+        // Uniform 20 °C: 10 * 365.25 = 3652.5 GDD, 0 chill months.
+        assert_eq!(gdd_base_10(&[20.0; 12]), Some(3652.5));
+        // Temperate Paris-like: Jan..Dec means.
+        let paris = [
+            4.5, 5.5, 8.5, 11.5, 15.0, 18.5, 20.5, 20.0, 16.5, 12.5, 8.0, 5.0,
+        ];
+        // Chill months: Jan (4.5), Feb (5.5), Dec (5.0) => 3.
+        assert_eq!(chill_months(&paris), Some(3));
+        // Boundary checks: 0.0 is NOT a chill month; 7.2 IS; 7.21 is NOT.
+        let bounds = [
+            -1.0, 0.0, 0.01, 7.2, 7.21, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,
+        ];
+        assert_eq!(chill_months(&bounds), Some(2));
+        // Non-finite returns None.
+        let mut bad = [5.0; 12];
+        bad[3] = f64::NAN;
+        assert_eq!(gdd_base_10(&bad), None);
+        assert_eq!(chill_months(&bad), None);
     }
 }

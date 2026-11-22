@@ -13,6 +13,8 @@ pub mod cog;
 pub mod extremes;
 pub mod igh;
 pub mod layers;
+pub mod monthly;
+pub mod monthly_precip;
 pub mod netcdf;
 pub mod raster;
 pub mod regions;

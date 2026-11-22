@@ -191,6 +191,107 @@ const CHELSA_FILES: &[PinnedFile] = &[
     ),
 ];
 
+/// CHELSA V2.1 monthly mean daily minimum temperature (`tasmin`), 1981-2010,
+/// used for the `monthly` layer's `tmin` baseline (CC0 1.0).
+const CHELSA_TASMIN_FILES: &[PinnedFile] = &[
+    pin(
+        "chelsa/CHELSA_tasmin_01_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_01_1981-2010_V.2.1.tif"
+        ),
+        "c0ba028c0531331e38b97f16843663303e67005d4057141e1f40208eb00cfa14",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_02_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_02_1981-2010_V.2.1.tif"
+        ),
+        "4b9ff27a1d2440a9d059d7d3e58f68d7c44313d70a89cedd7009a4324cfc345e",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_03_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_03_1981-2010_V.2.1.tif"
+        ),
+        "2baed539639f9cc428fcdd711bfc2a189b3ba51be91edf13af8078716b3789c3",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_04_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_04_1981-2010_V.2.1.tif"
+        ),
+        "f8ce9eb6efc6f2d5bc536b7573756262e82860220490c348a375bcfbd890265f",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_05_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_05_1981-2010_V.2.1.tif"
+        ),
+        "1a1f013ec620531c00a2a19f8df072e1ed603aaf758517678a9b2230554532f4",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_06_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_06_1981-2010_V.2.1.tif"
+        ),
+        "43038088e59b5c95de42327696497b9f8037d31071802e5494df7b4838045d0b",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_07_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_07_1981-2010_V.2.1.tif"
+        ),
+        "be6c1f0cf4bd1ecc734b9173ac6f2d268d92e3a463e840a46ea63bc64ed00e1f",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_08_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_08_1981-2010_V.2.1.tif"
+        ),
+        "e86d3d9a2832c1a743b6aace2f1e3ebac77ed05f7c32b9ef40aa7dbb4a7d2980",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_09_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_09_1981-2010_V.2.1.tif"
+        ),
+        "733be01f3d393e91c067ec887bcd81656ce282ddfb46c866bdc2de42ef9ff48d",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_10_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_10_1981-2010_V.2.1.tif"
+        ),
+        "d05886e8debeecd7f99c5ef8475c6d72cdadb4da4e0c16d0a8d7977efbe96d2b",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_11_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_11_1981-2010_V.2.1.tif"
+        ),
+        "cb28ac71b2e74dfe7eb444bc99d662711957d6ddafef7fac26d7b6a0c2e74130",
+    ),
+    pin(
+        "chelsa/CHELSA_tasmin_12_1981-2010_V.2.1.tif",
+        concat!(
+            "https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/climatologies",
+            "/1981-2010/tasmin/CHELSA_tasmin_12_1981-2010_V.2.1.tif"
+        ),
+        "be4a32de5f14bef1684b595b194221408a0004da2a165d6f64dd709f03aaede7",
+    ),
+];
+
 /// CHELSA 2041-2070 SSP3-7.0 bio6 of five GCMs: only for the delta-method
 /// check (`build-grid --stage check-future`).
 const CHELSA_FUTURE_FILES: &[PinnedFile] = &[
@@ -432,6 +533,17 @@ pub const SOURCES: &[Source] = &[
         required: true,
         layer: "extremes",
     },
+    Source {
+        id: "chelsa-v2.1-tasmin",
+        title: "CHELSA V2.1 monthly mean daily minimum temperature (tasmin), 1981-2010 (12 months)",
+        citation: "Karger, D. N., Conrad, O., Böhner, J., Kawohl, T., Kreft, H., Soria-Auza, R. W., Zimmermann, N. E., Linder, H. P., Kessler, M. (2017). Climatologies at high resolution for the earth's land surface areas. Scientific Data 4, 170122. https://doi.org/10.1038/sdata.2017.122 -- Karger, D. N., et al. (2021). Climatologies at high resolution for the earth's land surface areas (CHELSA V2.1). EnviDat. https://doi.org/10.16904/envidat.228",
+        landing: "https://doi.org/10.16904/envidat.228",
+        licence: "CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/)",
+        notes: "Monthly mean daily minimum air temperature (12 GeoTIFFs, 30 arc-second, K x 10), aggregated to 0.1-degree cell means and shifted from 1981-2010 to 1991-2020 with 1/3 of the Beck 1961-1990 to 1991-2020 monthly change; future monthly tmin adds Beck monthly temperature deltas, clamped to tmin <= tmean.",
+        files: CHELSA_TASMIN_FILES,
+        required: true,
+        layer: "monthly",
+    },
 ];
 
 /// Base URL of CHELSA climatologies (for documentation).
@@ -518,11 +630,16 @@ mod tests {
         }
         assert!(CHELSA_FILES.iter().all(|f| f.url.starts_with(CHELSA_BASE)));
         assert!(
+            CHELSA_TASMIN_FILES
+                .iter()
+                .all(|f| f.url.starts_with(CHELSA_BASE))
+        );
+        assert!(
             SOILGRIDS_FILES
                 .iter()
                 .all(|f| f.url.starts_with(SOILGRIDS_BASE))
         );
-        for layer in ["climate", "soil", "regions", "extremes"] {
+        for layer in ["climate", "soil", "regions", "extremes", "monthly"] {
             assert!(!manifest_sources(layer).is_empty(), "{layer}");
         }
     }
@@ -535,6 +652,7 @@ mod tests {
             problems.len(),
             BECK_FILES.len()
                 + CHELSA_FILES.len()
+                + CHELSA_TASMIN_FILES.len()
                 + SOILGRIDS_FILES.len()
                 + NATURAL_EARTH_FILES.len()
                 + WGSRPD_FILES.len()

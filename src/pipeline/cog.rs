@@ -12,6 +12,8 @@ use super::{PipelineError, Result};
 use crate::extremes::ExtremesTile;
 use crate::layer::LayerTile;
 use crate::model::NODATA;
+use crate::monthly::MonthlyTile;
+use crate::monthly_precip::MonthlyPrecipTile;
 use crate::raster::Raster;
 use crate::tile::Tile;
 
@@ -75,6 +77,24 @@ pub fn write_tile(tile: &Tile, path: &Path) -> Result<()> {
 /// # Errors
 /// Writer, reader or I/O errors, or a value mismatch.
 pub fn write_extremes_tile_checked(tile: &ExtremesTile, path: &Path) -> Result<Vec<u8>> {
+    write_raster_checked(tile.as_raster(), path)
+}
+
+/// Write a `monthly` tile (0.1 degree, 75 bands) and read it back with the
+/// crate's reader; errors if the values differ.
+///
+/// # Errors
+/// Writer, reader or I/O errors, or a value mismatch.
+pub fn write_monthly_tile_checked(tile: &MonthlyTile, path: &Path) -> Result<Vec<u8>> {
+    write_raster_checked(tile.as_raster(), path)
+}
+
+/// Write a `monthly_precip` tile (0.25 degree, 36 bands) and read it back
+/// with the crate's reader; errors if the values differ.
+///
+/// # Errors
+/// Writer, reader or I/O errors, or a value mismatch.
+pub fn write_monthly_precip_tile_checked(tile: &MonthlyPrecipTile, path: &Path) -> Result<Vec<u8>> {
     write_raster_checked(tile.as_raster(), path)
 }
 
@@ -210,6 +230,43 @@ mod tests {
             "extremes fixture drifted"
         );
         assert!(Tile::decode(&bytes).is_err(), "not a climate tile");
+    }
+
+    /// The committed monthly and monthly_precip fixtures are what the writer
+    /// produces today (`CANOPI_REGEN_FIXTURES=1` rewrites them).
+    #[test]
+    fn committed_monthly_fixtures_are_reproducible() {
+        let m_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-monthly-n50e000.tif"
+        );
+        let m_tile = crate::monthly::synthetic::monthly();
+        let m_bytes = write_monthly_tile_checked(&m_tile, &temp("monthly-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(m_fixture, &m_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(m_fixture).unwrap(),
+            m_bytes,
+            "monthly fixture drifted"
+        );
+
+        let p_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-monthly-precip-n50e000.tif"
+        );
+        let p_tile = crate::monthly_precip::synthetic::monthly_precip();
+        let p_bytes =
+            write_monthly_precip_tile_checked(&p_tile, &temp("monthly-precip-fixture.tif"))
+                .unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(p_fixture, &p_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(p_fixture).unwrap(),
+            p_bytes,
+            "monthly_precip fixture drifted"
+        );
     }
 
     /// The committed fixture is what the writer produces today. Set

@@ -15,13 +15,15 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::derived::{MonthlySummary, dry_month_mask};
+use crate::derived::{MonthlySummary, chill_months, dry_month_mask, gdd_base_10};
 use crate::extremes::{self, ExtremesLookup, ExtremesTile};
 use crate::grid::TileId;
 use crate::koppen;
 use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
 use crate::lookup::{Lookup, LookupError, lookup_across};
 use crate::model::{NODATA, VARIABLES, decode_value};
+use crate::monthly::{self, MonthlyLookup, MonthlyTile};
+use crate::monthly_precip::{self, MonthlyPrecipLookup, MonthlyPrecipTile, PRECIP_LOOKUP_RADIUS};
 use crate::regions::{self, RegionsLookup, decode_code, encode_code};
 use crate::soil::{self, SoilLookup, texture_class};
 use crate::tile::Tile;
@@ -32,6 +34,10 @@ pub type ClimateTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a Tile>;
 pub type LayerTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a LayerTile>;
 /// An extremes tile getter: the decoded tile, or `None` (no file).
 pub type ExtremesTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a ExtremesTile>;
+/// A monthly tile getter: the decoded tile, or `None` (no file).
+pub type MonthlyTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a MonthlyTile>;
+/// A monthly_precip tile getter: the decoded tile, or `None` (no file).
+pub type MonthlyPrecipTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a MonthlyPrecipTile>;
 
 /// The tile getters of a grid: climate, and each layer (`None`: the grid
 /// has no such layer).
@@ -45,6 +51,10 @@ pub struct Getters<'a, 'b> {
     pub regions: Option<LayerTiles<'a, 'b>>,
     /// Extremes tiles.
     pub extremes: Option<ExtremesTiles<'a, 'b>>,
+    /// Monthly tiles.
+    pub monthly: Option<MonthlyTiles<'a, 'b>>,
+    /// Monthly precipitation tiles (0.25-degree grid).
+    pub monthly_precip: Option<MonthlyPrecipTiles<'a, 'b>>,
 }
 
 /// What a reader answers at a point (the CLI's `lookup` JSON).
@@ -59,14 +69,27 @@ pub struct Site {
     /// Coldest night and hottest day at the climate lookup's cell, `None`
     /// without the layer, without climate, or where the cell has none.
     pub extremes: Option<ExtremesLookup>,
+    /// Monthly climatology at the climate lookup's cell, `None` without the
+    /// layer, without climate, or where the cell has none.
+    pub monthly: Option<MonthlyLookup>,
+    /// Monthly precipitation on the 0.25-degree grid (with radius-1 coastal
+    /// fallback), `None` without the layer or with no cell near.
+    pub monthly_precip: Option<MonthlyPrecipLookup>,
 }
 
 impl Site {
-    /// `{"climate": …, "extremes": …, "regions": …, "soil": …}` (keys
-    /// sorted), as printed by `canopi-climate lookup`.
+    /// `{"climate": …, "extremes": …, "monthly": …, "monthly_precip": …, "regions": …, "soil": …}`
+    /// (keys sorted), as printed by `canopi-climate lookup`.
     #[must_use]
     pub fn json(&self) -> Value {
-        json!({ "climate": self.climate, "soil": self.soil, "regions": self.regions, "extremes": self.extremes })
+        json!({
+            "climate": self.climate,
+            "soil": self.soil,
+            "regions": self.regions,
+            "extremes": self.extremes,
+            "monthly": self.monthly,
+            "monthly_precip": self.monthly_precip,
+        })
     }
 
     /// Whether any part has data (`lookup` exits 2 when none has).
@@ -74,6 +97,7 @@ impl Site {
     pub fn found(&self) -> bool {
         self.climate.is_some()
             || self.soil.is_some()
+            || self.monthly_precip.is_some()
             || self
                 .regions
                 .as_ref()
@@ -98,14 +122,16 @@ impl Site {
         self.climate == other.climate
             && self.soil == other.soil
             && self.extremes == other.extremes
+            && self.monthly == other.monthly
+            && self.monthly_precip == other.monthly_precip
             && codes(self) == codes(other)
     }
 }
 
 /// Answer a point from decoded tiles. With `own_tile_only`, every getter is
 /// limited to the point's own tile: the answer of a reader that fetched
-/// that tile only. The extremes are read at the climate lookup's cell, in
-/// that cell's tile.
+/// that tile only. The extremes and monthly layers are read at the climate
+/// lookup's cell, in that cell's tile.
 ///
 /// # Errors
 /// [`LookupError::InvalidCoordinate`].
@@ -119,6 +145,8 @@ pub fn site(
         soil,
         regions,
         extremes: ext,
+        monthly: mon,
+        monthly_precip: mon_p,
     } = g;
     let own = TileId::of(lat, lon).ok_or(LookupError::InvalidCoordinate)?;
     let keep = |id: TileId| !own_tile_only || id == own;
@@ -132,6 +160,22 @@ pub fn site(
             }
         }
         _ => None,
+    };
+    let monthly = match (mon, &climate) {
+        (Some(get), Some(c)) => {
+            match TileId::parse(&c.tile).and_then(|id| get(id).filter(|_| keep(id))) {
+                Some(t) => monthly::at_cell(t, c.cell_lat, c.cell_lon)?,
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let monthly_precip = match mon_p {
+        Some(get) => {
+            let g = |id: TileId| get(id).filter(|_| keep(id));
+            monthly_precip::lookup_across(g, lat, lon, PRECIP_LOOKUP_RADIUS)?
+        }
+        None => None,
     };
     let soil = match soil {
         Some(get) => {
@@ -152,6 +196,8 @@ pub fn site(
         soil,
         regions,
         extremes,
+        monthly,
+        monthly_precip,
     })
 }
 
@@ -428,7 +474,58 @@ pub fn tables() -> Value {
         "decode": decode,
         "usda": usda,
         "dry_month": dry_month_table(),
+        "gdd_chill": gdd_chill_table(),
     })
+}
+
+fn gdd_chill_table() -> Vec<Value> {
+    let cases: [(&str, [f64; 12]); 5] = [
+        ("uniform_10c", [10.0; 12]),
+        ("uniform_20c", [20.0; 12]),
+        (
+            "paris_like",
+            [
+                4.5, 5.5, 8.5, 11.5, 15.0, 18.5, 20.5, 20.0, 16.5, 12.5, 8.0, 5.0,
+            ],
+        ),
+        (
+            "chill_boundaries",
+            [
+                -1.0, 0.0, 0.01, 7.2, 7.21, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0,
+            ],
+        ),
+        (
+            "non_finite",
+            [
+                5.0,
+                5.0,
+                5.0,
+                f64::NAN,
+                5.0,
+                5.0,
+                5.0,
+                5.0,
+                5.0,
+                5.0,
+                5.0,
+                5.0,
+            ],
+        ),
+    ];
+    cases
+        .iter()
+        .map(|(name, t)| {
+            let gdd = gdd_base_10(t).map(round1);
+            let chill = chill_months(t);
+            let t_json: Vec<Option<f64>> = t.iter().map(|&v| v.is_finite().then_some(v)).collect();
+            json!({
+                "name": name,
+                "tmean_c": t_json,
+                "gdd_base_10": gdd,
+                "chill_months": chill,
+            })
+        })
+        .collect()
 }
 
 fn dry_month_table() -> Vec<Value> {
@@ -578,15 +675,21 @@ mod tests {
         let t = synthetic::tile(TileId::parse("n50e000").unwrap());
         let (soil, regions) = (layers::soil(), layers::regions());
         let ext = crate::extremes::synthetic::extremes();
+        let mon = crate::monthly::synthetic::monthly();
+        let mon_p = crate::monthly_precip::synthetic::monthly_precip();
         let ct = |id: TileId| (id == t.id()).then_some(&t);
         let st = |id: TileId| (id == soil.id()).then_some(&soil);
         let rt = |id: TileId| (id == regions.id()).then_some(&regions);
         let et = |id: TileId| (id == ext.id()).then_some(&ext);
+        let mt = |id: TileId| (id == mon.id()).then_some(&mon);
+        let mpt = |id: TileId| (id == mon_p.id()).then_some(&mon_p);
         let g = Getters {
             climate: &ct,
             soil: Some(&st),
             regions: Some(&rt),
             extremes: Some(&et),
+            monthly: Some(&mt),
+            monthly_precip: Some(&mpt),
         };
         let points: Vec<Value> = points()
             .iter()
@@ -595,6 +698,8 @@ mod tests {
         let tiles = json!({
             "climate": "tests/fixtures/synthetic-n50e000.tif",
             "extremes": "tests/fixtures/synthetic-extremes-n50e000.tif",
+            "monthly": "tests/fixtures/synthetic-monthly-n50e000.tif",
+            "monthly_precip": "tests/fixtures/synthetic-monthly-precip-n50e000.tif",
             "soil": "tests/fixtures/synthetic-soil-n50e000.tif",
             "regions": "tests/fixtures/synthetic-regions-n50e000.tif",
         });

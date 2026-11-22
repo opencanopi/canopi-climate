@@ -319,7 +319,9 @@ fn build_tile(tile: &Tile, inp: &Inputs) -> (Vec<i16>, Counts, Samples) {
     (data, n, s)
 }
 
-fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
+/// Build the manifest `LayerSpec` for `extremes`.
+#[must_use]
+pub fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
     LayerSpec {
         id: DIR.into(),
         description: "Coldest night and hottest day of a typical year (mean annual extremes of the daily minimum and maximum temperature) for every climate slot".into(),
