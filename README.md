@@ -153,7 +153,7 @@ output is byte-identical to 0.2.0.
 |---|---|
 | default | grid geometry, tile decoding (`tiff` crate, Deflate only), lookup, Köppen classifier, derived measures, soil and regions lookups, texture classes, manifest types |
 | `pipeline` | grid builder and CLI: windowed GeoTIFF reading on `wbgeotiff`, NetCDF/HDF5 on `wbhdf`, Homolosine on `proj4rs`, polygons on `geo`/`geojson`, pinned sources, aggregation, COG writer, sampling |
-| `wasm` | `wasm-bindgen` exports: `tileName`, `lookup`, `lookupSoil`, `lookupRegions`, `textureClass`, `version` |
+| `wasm` | `wasm-bindgen` exports: `tileName`, `lookup`, `lookupSoil`, `lookupRegions`, `lookupExtremes`, `usdaZone`, `textureClass`, `version` |
 
 There are no C libraries, no GDAL and no HTTP client: the crate does not
 download anything.

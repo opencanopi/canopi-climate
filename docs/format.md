@@ -1,10 +1,11 @@
 # Tile format contract (normative)
 
-- Status: accepted (2026-11-12; extremes layer 2026-11-18), crate 0.3.0, `format_version` 1.
+- Status: accepted (2026-11-12; extremes layer 2026-11-18; monthly & monthly_precip layers 2026-11-22), crate 0.4.0, `format_version` 1.
 - This document is the crate's architecture decision for the published grid: what a release
   contains and how a reader must interpret it. It is normative. The reasons behind the choices are
   in [0001](decisions/0001-tile-format.md) (container), [0002](decisions/0002-koppen-class-vs-monthly-means.md)
-  (Köppen class), [0003](decisions/0003-site-layer-formats.md) (site layers) and
+  (Köppen class), [0003](decisions/0003-site-layer-formats.md) (site layers),
+  [0004](decisions/0004-monthly-and-relief-layers.md) (monthly layers and per-layer schema) and
   [0005](decisions/0005-annual-extremes.md) (annual extremes).
 - Machine-readable companions: `tests/fixtures/synthetic-expected.json` and `vectors/lookup.json`
   ([Vectors](#vectors)). Where this text and the vectors disagree, the vectors describe what the
@@ -21,7 +22,9 @@ A grid release is one tar (`canopi-climate-grid-vX.Y.Z.tar`) holding:
 | `manifest.json` | The grid description below; its SHA-256 identifies the grid. |
 | `tiles/<name>.tif` | Climate tiles, one per 10° tile with land. |
 | `soil/<name>.tif`, `regions/<name>.tif` | Site-layer tiles (`layers` in the manifest). |
-| `extremes/<name>.tif` | Annual-extremes tiles (a layer on the climate grid, since 0.3.0). |
+| `extremes/<name>.tif` | Annual-extremes tiles (a layer on the 0.1° climate grid, since 0.3.0). |
+| `monthly/<name>.tif` | Monthly temperature and dry-month mask tiles (a layer on the 0.1° climate grid, since 0.4.0). |
+| `monthly_precip/<name>.tif` | Monthly precipitation tiles (a layer on a 0.25° grid, since 0.4.0). |
 | `ATTRIBUTION.md` | Sources, licences, citations. |
 | `build-report.json` | The build's checks and counts (land cells, class/means contradictions, clamped extremes, source comparisons; `layers`: soil fill by distance, region codes). Informative: a reader does not need it. |
 | `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md` and every tile. |
@@ -33,8 +36,18 @@ manifest) as "no data here", not as an error.
 
 `format` is `"canopi-climate-grid"` and `format_version` is `1`. A reader MUST refuse any other
 `format` or `format_version`. A reader MUST ignore manifest fields it does not know: `layers` was
-added in 0.2.0 without a version change, and a 0.1.0 reader still reads the release
+added in 0.2.0 and `dry_month_rule`, `layers[].slots`, `layers[].version` and `layers[].bands[].months`
+are optional fields added without a version change, so a 0.1.0 reader still reads the release
 (`tests/manifest_compat.rs`).
+
+When `dry_month_rule` is present at the top level of the manifest, its value for this contract is
+`"gaussen_p_lt_2t"`. A reader that checks dry months SHOULD assert this value when present; a
+different rule would be a new identifier and a minor release.
+
+Each layer entry in `layers[]` declares its own geometry (`cell_deg`, `tile_cells`), band list
+(`bands[]`, each with optional `months`), optional `slots[]`, optional `version`, and `encoding`
+(`bands`, `band_order`). A reader takes a layer's geometry and band positions from the manifest and
+checks the band ids, units, scales and offsets it knows.
 
 Each tile entry (`tiles[]`, `layers[].tiles[]`) has `name`, `path`, `bytes` and `sha256`. Climate tile
 entries also have `complete_cells`. A reader that fetches tiles SHOULD check `bytes` and MAY check
@@ -52,12 +65,12 @@ readable TIFF or reach past the end of the file), and a writer MUST NOT produce 
 | Images | Exactly one IFD (no overviews, no masks). |
 | Bounds | The IFD, the values of every IFD entry (whatever its tag) and the tile data lie inside the file; anything past the end is `TileError::Tiff`. Value sizes follow TIFF 6.0 and BigTIFF (an unknown type counts one byte per value); the website's reader knows only BYTE, SHORT, LONG, DOUBLE and LONG8 sizes and counts the rest as one byte, so the crate may refuse an out-of-line value the site never reads (see below). |
 | Field types | `ImageWidth`, `ImageLength`, `BitsPerSample`, `Compression`, `SamplesPerPixel`, `PlanarConfiguration`, `Predictor`, `TileWidth`, `TileLength`, `TileOffsets`, `TileByteCounts` and `SampleFormat` are SHORT or LONG; `ModelPixelScale` and `ModelTiepoint` are DOUBLE. Other entries may have any type. |
-| Size | `side × side` pixels: 100 for climate tiles, 200 for layer tiles. |
+| Size | `side × side` pixels, where `side` is the grid's or layer's `tile_cells` (100 for 0.1° tiles, 200 for 0.05° tiles, 40 for 0.25° tiles), with `tile_cells × cell_deg = 10` exactly. |
 | Samples | `SamplesPerPixel` present (no default) and = the band count; `BitsPerSample` 16 for every sample; `SampleFormat` present and 2 (signed integer) for every sample, given once or per band. |
 | Interleave | `PlanarConfiguration` absent or 1 (pixel-interleaved). |
 | Compression | `Compression` 8 or 32946 (Deflate). |
 | Predictor | `Predictor` absent or 1 (none). |
-| Internal tiling | One internal tile covering the image: `TileWidth` and `TileLength` ≥ `side`, one `TileOffsets` and one `TileByteCounts` entry. The writer uses 112 (climate) and 208 (layers), the smallest multiples of 16 above `side`. |
+| Internal tiling | One internal tile covering the image: `TileWidth` and `TileLength` ≥ `side`, one `TileOffsets` and one `TileByteCounts` entry. The writer uses the smallest multiple of 16 ≥ `side` (112 for 100, 208 for 200, 48 for 40). |
 | No data | −32768 (`NODATA`). |
 
 `wbgeotiff`'s `CogWriter` writes the tiles; the `tiff` crate reads them, natively and in WebAssembly.
@@ -70,12 +83,15 @@ first), and it refuses SHORT or LONG georeferencing (the site also reads them as
 
 ## Georeferencing and grid
 
-| | Climate | Layers (`soil`, `regions`) |
-|---|---|---|
-| CRS | EPSG:4326 (latitude/longitude, degrees) | same |
-| Cell | 0.1° | 0.05° |
-| Tile | 10° × 10°, 100 × 100 cells | the same 10° tiles, 200 × 200 cells |
-| Global grid | 3600 × 1800 cells, 36 × 18 tiles | 7200 × 3600 cells |
+Every grid and layer shares the same 10° × 10° tiles (36 × 18 tiles globally, EPSG:4326), with
+`tile_cells × cell_deg = 10` exactly:
+
+| | Climate, `extremes`, `monthly` | `soil`, `regions` | `monthly_precip` |
+|---|---|---|---|
+| CRS | EPSG:4326 (latitude/longitude, degrees) | same | same |
+| Cell (`cell_deg`) | 0.1° | 0.05° | 0.25° |
+| Tile (`tile_cells`) | 10° × 10°, 100 × 100 cells | 200 × 200 cells | 40 × 40 cells |
+| Global grid | 3600 × 1800 cells, 36 × 18 tiles | 7200 × 3600 cells | 1440 × 720 cells |
 
 - **Tile names** are the tile's north-west corner: `n50e000` covers 40–50° N, 0–10° E; `s10w080`
   covers 10–20° S, 70–80° W. Latitude is two digits after `n`/`s`, longitude three after `e`/`w`.
@@ -92,8 +108,8 @@ first), and it refuses SHORT or LONG georeferencing (the site also reads them as
 - **Pixel order.** Row-major from the north-west corner; within a pixel, bands in the order below.
   Sample `i` of cell `c` is at `data[c * bands + i]`.
 
-A layer tile nests exactly in the climate tile of the same name: each climate cell holds 2 × 2
-layer cells.
+A 0.05° layer tile nests exactly in the 0.1° climate tile of the same name: each 0.1° cell holds
+2 × 2 cells of 0.05°. A 0.25° layer tile covers the exact same 10° × 10° extent with 40 × 40 cells.
 
 ## Bands
 
@@ -124,7 +140,27 @@ Every offset is 0. Slots, in order:
 | 5–8 | 2071-2099 | ssp126, ssp245, ssp370, ssp585 |
 
 The manifest's `variables` and `slots` repeat these lists with descriptions and sources. A reader
-MUST check them against its own copy (id, unit, scale, offset) and refuse a mismatch.
+MUST check them against its own copy (id, unit, scale, offset) and refuse a mismatch. The eight
+climate variables, including `tmean_cold` and `tmean_warm`, are kept in every release of
+`format_version` 1.
+
+#### Dry-month rule (`gaussen_p_lt_2t`)
+
+For a cell, a slot and a month, with `P` the month's precipitation in mm and `T` its mean
+temperature in °C (both Beck et al.'s unrounded `f32` values before quantisation), the month is dry
+when `P < 2 × T` (strict inequality, Gaussen). Consequences:
+
+- `P = 2 × T` is **not** dry.
+- A month with `T ≤ 0 °C` is never dry (since `P ≥ 0`).
+- If any of the 12 monthly temperature or precipitation values for that cell and slot is non-finite
+  (a missing cell), both `dry_months` and the monthly `dry_mask` are `NODATA`; there is no
+  per-month unknown bit.
+- `dry_months` and `dry_mask` are computed once from the unrounded values. A reader MUST NOT
+  recompute dryness from stored `tmean` and `precip`: at 0.5 °C and 1 mm steps (and at 0.25° for
+  monthly rain) a recomputed answer can differ near `P ≈ 2 × T`.
+
+This rule is named `"gaussen_p_lt_2t"` in the manifest's `dry_month_rule` field and pinned by the
+`dry_month` vector table.
 
 ### Soil layer (`soil/`): 4 bands
 
@@ -259,25 +295,64 @@ zone `h / 2 + 1` (integer division) followed by `a` for even `h`, `b` for odd (t
 The WebAssembly functions throw a `JsError` with the error's message for the first five rows and
 return `null` for the last.
 
-## Reserved: monthly mask bits (v0.3)
+## Monthly layers (`monthly/` and `monthly_precip/`)
 
-The v0.3 monthly layer (plan step C3) will store a per-slot month mask in an `int16` band:
+Multi-band layers with per-band month counts declare `band_order: "band, slot, month"` in their
+manifest `encoding`. Band (0-based) = `start(band) + slot × months(band) + month`, where `months`
+is counted as `1` when absent on a band and `start(band)` is the sum of `len(slots) × months` of
+all preceding bands.
+
+Both monthly layers store 3 slots in order:
+
+| # | Period | Scenario |
+|---|---|---|
+| 0 | 1991-2020 | historical |
+| 1 | 2041-2070 | ssp245 |
+| 2 | 2071-2099 | ssp245 |
+
+### Monthly temperature and dry-month mask (`monthly/`): 75 bands
+
+On the 0.1° climate grid: 100 × 100 cells per tile, internal tile 112. 3 slots (above).
+
+| # | Band id | Months | Unit | Scale | Indices (3 slots) | Content |
+|---|---|---|---|---|---|---|
+| 0 | `tmean` | 12 | °C | 0.5 | 0–35 | monthly mean temperature (Beck et al. 0.1°) |
+| 1 | `tmin` | 12 | °C | 0.5 | 36–71 | monthly mean daily minimum ("night low", CHELSA V2.1 `tasmin` 1981–2010 with Beck monthly deltas, clamped to `tmin ≤ tmean`) |
+| 2 | `dry_mask` | – | bits | 1 | 72–74 | per-slot `int16` bitmask (below) |
+
+Every offset is 0. `dry_mask` bit layout:
 
 | Bits | Meaning |
 |---|---|
-| 0–11 | January … December: the month is dry (Gaussen: precipitation in mm < 2 × mean temperature in °C) |
-| 12–14 | Reserved ("water across the year", decided in the website's F5 design check). Writers MUST write 0; readers MUST ignore them. |
-| 15 | Never set, so a mask is never negative and never equals `NODATA`. |
+| 0–11 | January … December: the month is dry under `gaussen_p_lt_2t` (`P < 2 × T`) |
+| 12–14 | Reserved ("water across the year"). Writers MUST write 0; readers MUST ignore them. |
+| 15 | Never set, so a valid mask is never negative and never equals `NODATA`. |
 
-For every land cell and slot, `popcount(mask & 0x0FFF)` MUST equal the climate tile's `dry_months`.
-Nothing in format 1 uses these bits yet; they are fixed now so a reader written today keeps working.
+A cell has all 75 values or none, on the exact cells where the climate tile is complete, so a
+monthly lookup reads the climate answer's `(cell_lat, cell_lon)` in the climate answer's `tile`
+(no search of its own). For every land cell and slot, `popcount(dry_mask & 0x0FFF)` MUST equal the
+climate tile's `dry_months` for that slot, and `tmin ≤ tmean` MUST hold for every month.
+
+### Monthly precipitation (`monthly_precip/`): 36 bands
+
+On a 0.25° grid: 40 × 40 cells per 10° tile, internal tile 48. 3 slots (above).
+
+| # | Band id | Months | Unit | Scale | Indices (3 slots) | Content |
+|---|---|---|---|---|---|---|
+| 0 | `precip` | 12 | mm | 1 | 0–35 | monthly precipitation (mean of complete 0.1° Beck land cells inside the 0.25° cell) |
+
+Offset 0. A 0.25° cell has all 36 values or none. Because the 0.25° grid does not align 1:1 with
+the 0.1° climate cells on irregular coasts, a `monthly_precip` lookup uses the cell holding the
+point (or the climate answer's cell centre) when it has data, else falls back to the nearest cell
+with data within radius 1 (0.25° cells, Euclidean, ties north then west, cross-tile when using
+`lookup_across`).
 
 ## Compatibility rule
 
 | Change | Allowed in | Requirement |
 |---|---|---|
-| New optional manifest field, new layer, new CLI flag or subcommand with output unchanged without it | patch (0.2.x) | `format_version` stays 1; readers ignore what they do not know; vectors unchanged byte for byte except `cli`, and except a new layer's own answer key (`extremes`: `null` on a grid without the layer). |
-| New grid built with the same format (new sources, fixes) | minor (0.x.0) | New grid release and manifest SHA-256; vectors regenerated and reviewed. |
+| New optional manifest field, new CLI flag or subcommand with output unchanged without it, docs or internal refactor keeping the same grid | patch (0.x.y) | `format_version` stays 1; readers ignore what they do not know; `release/grid.json` stays on the existing grid; vectors unchanged byte for byte except `cli` and additive rule tables. |
+| New grid built with the same format (new layers, new sources, data fixes) | minor (0.x.0) | `format_version` stays 1; new grid release tar and manifest SHA-256; vectors regenerated and reviewed. |
 | Any change to the container rules, georeferencing, cell edges, band order, a band's unit, scale or offset, the Köppen legend, the lookup search, or an answer's field | minor (0.x.0) with `format_version` + 1 | This document updated first; old readers refuse the new manifest by its version. |
 
 A crate release that keeps the grid (0.2.1) names the grid release it was tested against in
@@ -292,6 +367,7 @@ A crate release that keeps the grid (0.2.1) names the grid release it was tested
 
 Both hold `points` (`name`, `lat`, `lon`, `own_tile`, and `expect`: the climate, soil, regions and
 extremes answers, or `"invalid"`) and `tables`: `legend`, `margin`, `texture`, `codes` (`encode`,
-`decode`), `decode` (scale decoding) and `usda` (USDA zones). `vectors/lookup.json` has the website goldens' shape (`cli`,
-`grid_manifest_sha256`, `points`) plus `own_tile` and `tables`. A port passes when it reproduces
-every `expect` its lookup form can answer and every table row.
+`decode`), `decode` (scale decoding), `usda` (USDA zones) and `dry_month` (Gaussen `gaussen_p_lt_2t`
+rule). `vectors/lookup.json` has the website goldens' shape (`cli`, `grid_manifest_sha256`,
+`points`) plus `own_tile` and `tables`. A port passes when it reproduces every `expect` its lookup
+form can answer and every table row.

@@ -34,16 +34,16 @@ pub struct Manifest {
     pub tiles: Vec<TileSpec>,
     /// Notes on methods and known limits.
     pub notes: Vec<String>,
-    /// Site layers on the finer layer grid (absent before 0.2.0; optional).
+    /// Optional layers, each with its own grid and tiles (absent before 0.2.0; optional).
     #[serde(default)]
     pub layers: Vec<LayerSpec>,
 }
 
-/// A site layer: its own tiles, in the climate grid's 10-degree tiles on
-/// a finer grid (see `crate::layer`).
+/// An optional layer: its own tiles, in the climate grid's 10-degree tiles
+/// on the layer's declared grid (`cell_deg`, `tile_cells`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerSpec {
-    /// Identifier: `soil` or `regions`.
+    /// Identifier, e.g. `soil`, `regions`, `extremes`, `monthly`, `monthly_precip`.
     pub id: String,
     /// What the layer holds.
     pub description: String,

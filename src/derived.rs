@@ -1,6 +1,6 @@
 //! Measures derived from 12 monthly means: the per-cell summaries stored in
-//! the grid. No hardiness zones: the grid's coldest-month minimum is not an
-//! annual extreme minimum.
+//! the grid. Annual extremes and USDA hardiness zones live in
+//! [`crate::extremes`].
 
 use crate::koppen;
 use crate::model::{ARIDITY_CAP, ARIDITY_MIN_PET_MM};
