@@ -1,12 +1,13 @@
 # Tile format contract (normative)
 
-- Status: accepted (2026-11-12; extremes layer 2026-11-18; monthly & monthly_precip layers 2026-11-22), crate 0.4.0, `format_version` 1.
+- Status: accepted (2026-11-12; extremes layer 2026-11-18; monthly & monthly_precip layers 2026-11-22; extremes_tail, frost_calendar & analogues.bin 2026-11-23), crate 0.5.0, `format_version` 1.
 - This document is the crate's architecture decision for the published grid: what a release
   contains and how a reader must interpret it. It is normative. The reasons behind the choices are
   in [0001](decisions/0001-tile-format.md) (container), [0002](decisions/0002-koppen-class-vs-monthly-means.md)
   (Köppen class), [0003](decisions/0003-site-layer-formats.md) (site layers),
-  [0004](decisions/0004-monthly-and-relief-layers.md) (monthly layers and per-layer schema) and
-  [0005](decisions/0005-annual-extremes.md) (annual extremes).
+  [0004](decisions/0004-monthly-and-relief-layers.md) (monthly layers and per-layer schema),
+  [0005](decisions/0005-annual-extremes.md) (annual extremes) and
+  [0006](decisions/0006-tail-extremes-frost-calendar-analogues.md) (tail extremes, frost calendar and 2050 Climate Twin analogues).
 - Machine-readable companions: `tests/fixtures/synthetic-expected.json` and `vectors/lookup.json`
   ([Vectors](#vectors)). Where this text and the vectors disagree, the vectors describe what the
   code does, and the disagreement is a bug in one of them.
@@ -25,6 +26,9 @@ A grid release is one tar (`canopi-climate-grid-vX.Y.Z.tar`) holding:
 | `extremes/<name>.tif` | Annual-extremes tiles (a layer on the 0.1° climate grid, since 0.3.0). |
 | `monthly/<name>.tif` | Monthly temperature and dry-month mask tiles (a layer on the 0.1° climate grid, since 0.4.0). |
 | `monthly_precip/<name>.tif` | Monthly precipitation tiles (a layer on a 0.25° grid, since 0.4.0). |
+| `extremes_tail/<name>.tif` | Static 1-in-10-year tail offsets, heat-stress days and recent warming trend (0.1° climate grid, since 0.5.0). |
+| `frost_calendar/<name>.tif` | Static hemisphere-aware frost dates, frost-free days, frost-year % and false-spring % (0.1° climate grid, since 0.5.0). |
+| `analogues.bin` | Compact binary k-NN index of historical 1991–2020 land cells for 2050 Climate Twin lookup (since 0.5.0). |
 | `ATTRIBUTION.md` | Sources, licences, citations. |
 | `build-report.json` | The build's checks and counts (land cells, class/means contradictions, clamped extremes, source comparisons; `layers`: soil fill by distance, region codes). Informative: a reader does not need it. |
 | `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md` and every tile. |
@@ -36,9 +40,14 @@ manifest) as "no data here", not as an error.
 
 `format` is `"canopi-climate-grid"` and `format_version` is `1`. A reader MUST refuse any other
 `format` or `format_version`. A reader MUST ignore manifest fields it does not know: `layers` was
-added in 0.2.0 and `dry_month_rule`, `layers[].slots`, `layers[].version` and `layers[].bands[].months`
-are optional fields added without a version change, so a 0.1.0 reader still reads the release
-(`tests/manifest_compat.rs`).
+added in 0.2.0, `dry_month_rule`, `layers[].slots`, `layers[].version` and `layers[].bands[].months`
+in 0.4.0, and `climate_tiles_sha256` and `analogues` in 0.5.0 — all optional fields added without a
+version change, so a 0.1.0 reader still reads the release (`tests/manifest_compat.rs`).
+
+When `climate_tiles_sha256` is present at the top level of the manifest, it is the lowercase hex
+SHA-256 of the UTF-8 string `"canopi-climate-tiles-v1\n"` followed by one line
+`"<name> <bytes> <sha256>\n"` per entry in `tiles[]`, sorted lexicographically by `name`. It stays
+unchanged when additive layers are added to the same climate tiles.
 
 When `dry_month_rule` is present at the top level of the manifest, its value for this contract is
 `"gaussen_p_lt_2t"`. A reader that checks dry months SHOULD assert this value when present; a
@@ -86,7 +95,7 @@ first), and it refuses SHORT or LONG georeferencing (the site also reads them as
 Every grid and layer shares the same 10° × 10° tiles (36 × 18 tiles globally, EPSG:4326), with
 `tile_cells × cell_deg = 10` exactly:
 
-| | Climate, `extremes`, `monthly` | `soil`, `regions` | `monthly_precip` |
+| | Climate, `extremes`, `monthly`, `extremes_tail`, `frost_calendar` | `soil`, `regions` | `monthly_precip` |
 |---|---|---|---|
 | CRS | EPSG:4326 (latitude/longitude, degrees) | same | same |
 | Cell (`cell_deg`) | 0.1° | 0.05° | 0.25° |
@@ -346,6 +355,67 @@ the 0.1° climate cells on irregular coasts, a `monthly_precip` lookup uses the 
 point (or the climate answer's cell centre) when it has data, else falls back to the nearest cell
 with data within radius 1 (0.25° cells, Euclidean, ties north then west, cross-tile when using
 `lookup_across`).
+
+## Tail extremes and frost calendar (`extremes_tail/` and `frost_calendar/`)
+
+Both layers sit on the 0.1° climate grid (100 × 100 cells per 10° tile, internal tile 112), are
+static (no `slots` array), and have no spatial search of their own: a reader reads the cell holding
+the climate answer's `(cell_lat, cell_lon)` in its `tile`.
+
+### Tail extremes (`extremes_tail/`): 4 bands
+
+| # | Band id | Unit | Scale | Content |
+|---|---|---|---|---|
+| 0 | `tmin_p10_gap` | °C | 0.1 | 1-in-10-year coldest-night offset below `tmin_extreme` (`<= 0.0`, ERA5-Land 1991–2020 `P10(TNn) − mean(TNn)`) |
+| 1 | `tmax_p90_gap` | °C | 0.1 | 1-in-10-year hottest-day offset above `tmax_extreme` (`>= 0.0`, ERA5-Land 1991–2020 `P90(TXx) − mean(TXx)`) |
+| 2 | `heat_days_35c` | days/year | 0.1 | mean annual days with daily `Tmax >= 35.0 °C` (1991–2020) |
+| 3 | `recent_trend_c` | °C | 0.1 | realized warming shift: `mean(Tmean, 2015–2025) − mean(Tmean, 1991–2020)` |
+
+Every offset is 0. A cell has all 4 values or none. For any `extremes` slot `s`, the 1-in-10-year
+extremes are `tmin_extreme[s] + tmin_p10_gap` and `tmax_extreme[s] + tmax_p90_gap`.
+
+### Frost calendar (`frost_calendar/`): 6 bands
+
+Computed from 1991–2020 ERA5-Land daily `Tmin` and `Tmean` in per-pixel frost-years anchored at each
+cell's thermal-winter DOY (`winter_doy`, opposite the warmest month) with leap day folded to DOY 365.
+
+| # | Band id | Unit | Scale | Range & sentinels (`NODATA = -32768`) | Content |
+|---|---|---|---|---|---|
+| 0 | `last_spring_frost_doy` | doy | 1 | `1..=365`, `0` = frost-free, `366` = year-round frost | conditional median last spring frost (`Tmin <= 0 °C`) |
+| 1 | `last_spring_frost_p90_doy` | doy | 1 | `1..=365`, `0` = frost-free, `366` = year-round frost | conditional 90th-percentile (1-in-10 late) last spring frost |
+| 2 | `first_autumn_frost_doy` | doy | 1 | `1..=365`, `0` = frost-free, `366` = year-round frost | conditional median first autumn frost (`Tmin <= 0 °C`) |
+| 3 | `frost_free_days` | days | 1 | `0..=365` (`365` = frost-free, `0` = year-round frost) | unconditional median frost-free season length |
+| 4 | `frost_year_pct` | % | 1 | `0..=100` | percentage of years with at least one day `Tmin <= 0 °C` |
+| 5 | `false_spring_pct` | % | 1 | `0..=100` (`0` when frost-free or GDD < 150) | percentage of years with `Tmin <= -2 °C` after `>= 150` GDD (base 5 °C) from `winter_doy` |
+
+Every offset is 0. A cell has all 6 values or none. Sentinel `0` and `366` are distinct from
+`NODATA` (`-32768`).
+
+## 2050 Climate Twin index (`analogues.bin`)
+
+`analogues.bin` is a little-endian binary table of representative 1991–2020 land cells for fast
+client-side k-NN analogue search. Its path, byte size, SHA-256, version and record count are listed
+under the optional top-level `analogues` manifest object and in `SHA256SUMS`.
+
+- **Header (120 bytes):**
+  - `magic`: `[u8; 4]` = `b"CNPA"`
+  - `version`: `u16` = `1`
+  - `header_bytes`: `u16` = `120`
+  - `record_count`: `u32`
+  - `feature_count`: `u8` = `8`
+  - `reserved`: `[u8; 3]` = `[0, 0, 0]`
+  - `mean`: `[f32; 8]`, `inv_std`: `[f32; 8]`, `weight`: `[f32; 8]`
+  - `close_threshold`: `f32` (`1.0`), `novel_threshold`: `f32` (`2.0`)
+- **Records (`record_count × 26` bytes, packed little-endian):**
+  - `lat_e2: i16`, `lon_e2: i16` (0.01°), `iso_a2: u16` (`0xFFFF` = none), `wgsrpd_l3: u16`
+    (`0xFFFF` = none), `koppen: u8` (1–30), `flags: u8` (bit 0 = `aridity` valid), `features: [i16; 8]`.
+  - Feature order & scales: `[tmean_cold (0.1 °C), tmean_warm (0.1 °C), tmin_cold (0.1 °C),
+    tmax_warm (0.1 °C), ln_precip (0.001), aridity (0.01), dry_months (1), summer_rain_frac (0.001)]`.
+- **Search semantics:** Standardized weighted RMS distance `sigma` over valid features (masking
+  `aridity` when absent on either query or candidate). `match_quality`: `"close"` (`<= 1.0`),
+  `"moderate"` (`<= 2.0`), `"novel"` (`> 2.0`, `novel_climate = true`). Results are deduplicated by
+  Haversine great-circle distance (`min_distance_km`, default `100 km`) and report `delta_lat_deg =
+  ||query_lat| − |cand_lat||`.
 
 ## Compatibility rule
 
