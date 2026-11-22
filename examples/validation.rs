@@ -30,7 +30,7 @@ const TOL_T: f64 = 1.5;
 const TOL_P: f64 = 0.40;
 
 /// slug, name, latitude, longitude.
-const CITIES: [(&str, &str, f64, f64); 22] = [
+const CITIES: [(&str, &str, f64, f64); 29] = [
     ("paris", "Paris", 48.8566, 2.3522),
     ("lyon", "Lyon", 45.7640, 4.8357),
     ("seville", "Seville", 37.3891, -5.9845),
@@ -53,6 +53,13 @@ const CITIES: [(&str, &str, f64, f64); 22] = [
     ("quito", "Quito", -0.1807, -78.4678),
     ("nuuk", "Nuuk", 64.1814, -51.6941),
     ("longyearbyen", "Longyearbyen", 78.2232, 15.6267),
+    ("kiambu", "Kiambu", -1.1714, 36.8356),
+    ("recife", "Recife", -8.0476, -34.8770),
+    ("oulu", "Oulu", 65.0121, 25.4651),
+    ("mendoza", "Mendoza", -32.8895, -68.8458),
+    ("kumasi", "Kumasi", 6.6885, -1.6244),
+    ("osaka", "Osaka", 34.6937, 135.5023),
+    ("riyadh", "Riyadh", 24.7136, 46.6753),
 ];
 
 fn main() -> Res<()> {

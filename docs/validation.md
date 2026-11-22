@@ -1,8 +1,9 @@
 # Validation
 
-Grid v0.1 (`out-v0.1`, built 2026-11-11) against ERA5 1991–2020 normals at
-22 cities covering every Köppen main group. Regenerate this table after a
-grid change; the commands are in `examples/validation.rs`.
+Grid v0.4 (`out-v0.4`) against ERA5 1991–2020 normals at 29 cities covering
+every Köppen main group (the 22 core cities plus 7 Plant Palette persona
+cities: Kiambu, Recife, Oulu, Mendoza, Kumasi, Osaka, Riyadh). Regenerate this
+table after a grid change; the commands are in `examples/validation.rs`.
 
 ## Method
 
@@ -58,6 +59,13 @@ grid change; the commands are in `examples/validation.rs`.
 | Quito | Csb / Cfb | 9.7 / 8.2 (+1.5) **miss** | 18.8 / 17.3 (+1.5) | 13.6 / 12.2 (+1.4) | 14.1 / 12.8 (+1.3) | 1152 / 2876 (-60%) **miss** | 1.71 / 4.48 | 1 / 0 | tmin_cold, precip |
 | Nuuk | ET / ET | -16.2 / -17.4 (+1.2) | 9.6 / 12.1 (-2.5) **miss** | -10.9 / -14.3 (+3.4) **miss** | 7.3 / 9.0 (-1.7) **miss** | 996 / 809 (+23%) | 2.47 / 2.07 | 0 / 0 | tmax_warm, tmean_cold, tmean_warm |
 | Longyearbyen | ET / ET | -17.3 / -16.5 (-0.8) | 6.0 / 8.0 (-2.0) **miss** | -13.9 / -14.1 (+0.2) | 5.1 / 6.5 (-1.4) | 365 / 432 (-16%) | 0.76 / 0.93 | 0 / 0 | tmax_warm |
+| Kiambu | Cfb / Csb | 12.0 / 12.1 (-0.1) | 26.1 / 26.1 (-0.0) | 17.2 / 16.6 (+0.6) | 20.8 / 20.5 (+0.3) | 986 / 693 (+42%) **miss** | 1.15 / 0.83 | 3 / 4 | precip |
+| Recife | Am / Aw | 22.7 / 22.3 (+0.4) | 29.4 / 29.9 (-0.5) | 24.6 / 24.5 (+0.1) | 27.3 / 27.3 (-0.0) | 1770 / 938 (+89%) **miss** | 1.14 / 0.60 | 3 / 4 | precip |
+| Oulu | Dfc / Dfc | -11.2 / -10.9 (-0.3) | 19.5 / 19.6 (-0.1) | -8.5 / -8.4 (-0.1) | 16.6 / 16.3 (+0.3) | 549 / 586 (-6%) | 0.97 / 1.06 | 0 / 0 | - |
+| Mendoza | BWk / BSk | 3.1 / 2.3 (+0.8) | 29.3 / 29.3 (-0.0) | 7.6 / 7.6 (+0.0) | 24.3 / 23.9 (+0.4) | 233 / 451 (-48%) **miss** | 0.28 / 0.56 | 12 / 0 | precip |
+| Kumasi | Aw / Aw | 21.8 / 21.6 (+0.2) | 33.7 / 33.7 (+0.0) | 24.7 / 24.6 (+0.1) | 28.1 / 28.6 (-0.5) | 1362 / 1080 (+26%) | 0.86 / 0.69 | 2 / 3 | - |
+| Osaka | Cfa / Cfa | 0.9 / 1.2 (-0.3) | 32.3 / 31.6 (+0.7) | 5.9 / 4.8 (+1.2) | 29.1 / 28.0 (+1.1) | 1414 / 1455 (-3%) | 1.53 / 1.70 | 0 / 0 | - |
+| Riyadh | BWh / BWh | 6.8 / 6.9 (-0.1) | 42.3 / 42.4 (-0.1) | 14.4 / 13.3 (+1.1) | 36.6 / 34.9 (+1.8) **miss** | 108 / 67 (+61%) **miss** | 0.07 / 0.05 | 12 / 12 | tmean_warm, precip |
 
 Columns give grid / ERA5 (grid − ERA5). The Köppen class of the grid is
 Beck et al.'s published class (`docs/decisions/0002-koppen-class-vs-monthly-means.md`);
@@ -119,6 +127,18 @@ to 1991–2020) removed the cold bias the prototype showed: Paris and Berlin
   - Both sources are coarse for Greenland's coast, but agree on ET.
 - **Longyearbyen** (`tmax_warm` −2.0): the cell includes glaciers and
   mountains above the town, which are cooler in summer.
+- **Kiambu** (precipitation +42 %): 986 mm against ERA5's 693 mm. Kiambu sits
+  on the wet windward slope north of Nairobi (observed normals ~1,000–1,100 mm);
+  all four temperatures agree within 0.6 °C.
+- **Recife** (precipitation +89 %): 1,770 mm against ERA5's 938 mm. Recife's
+  observed coastal rainfall is ~2,200 mm/year; ERA5 underestimates narrow
+  tropical coastal rain while temperatures agree within 0.5 °C.
+- **Mendoza** (precipitation −48 %): 233 mm against ERA5's 451 mm. Mendoza
+  lies in the Andean rain shadow (observed ~220 mm/year); ERA5 overestimates
+  foothill precipitation, while all four temperatures agree within 0.8 °C.
+- **Riyadh** (`tmean_warm` +1.8, precipitation +61 %): 108 mm against 67 mm in
+  a hyper-arid desert (both BWh, 12 dry months); `tmin_cold` and `tmax_warm`
+  agree within 0.1 °C.
 
 Cities without misses still show the usual offsets: Lyon, Phoenix and Tokyo
 are within tolerance but 0.9–1.0 °C warmer in their coldest or warmest month
@@ -162,6 +182,58 @@ years earlier. Beck et al.'s ensemble is constrained to models
 that reproduce observed warming, which excludes the hottest models, and two
 of CHELSA's five GCMs (UKESM1-0-LL, IPSL-CM6A-LR) are among the
 warmest. The grid's futures are therefore on the moderate side of CMIP6.
+
+## Extremes, monthly, and monthly_precip layers
+
+### Extremes (`v0.3.0`)
+
+Across the 29 validation cities, `extremes` produces consistent annual extreme
+minimums (`tmin_extreme_c`), annual extreme maximums (`tmax_extreme_c`), and
+USDA hardiness zones (`1a` at Yakutsk −50.5 °C through `13b` at Manaus
+22.5 °C, Singapore 23.7 °C, Recife 21.5 °C, Kumasi 19.2 °C; `8b` at Paris
+−6.7 °C and Lyon −7.4 °C; `5b` at Oulu −25.3 °C; `9b` at Mendoza −2.9 °C and
+Osaka −3.3 °C; `10a` at Riyadh −0.5 °C). Globally across 2,171,102 cells,
+`tmin_extreme` is strictly below `min_m(monthly.tmin)` at 100 % of cells
+(0 cells above; mean gap −9.62 °C, 5th–95th percentile −17.1 to −2.3 °C).
+
+### Monthly (`v0.4.0`)
+
+Global build-report invariants across all 2,171,421 complete climate cells:
+
+- `dry_mask` popcount matches `climate.dry_months` with **0 mismatches**
+  across all 3 slots (hard-fail gate).
+- `tmin <= tmean` at 100 % of cells/slots/months (3,381,444 values clamped
+  where Beck `tmean` and CHELSA `tasmin` diverge slightly; 0 CHELSA `tasmin`
+  missing or gap-filled cells).
+- `|min_m(monthly.tmean) - climate.tmean_cold|` and
+  `|max_m(monthly.tmean) - climate.tmean_warm|` have max absolute difference
+  **0.20 °C** (MAE 0.12 °C, p05/p50/p95 = −0.2 / 0.0 / +0.2 °C), inside the
+  0.30 °C quantization bound of 0.5 °C `tmean` vs 0.1 °C climate summaries.
+
+Against ERA5 1991–2020 monthly normals across all 29 cities × 12 months
+(348 city-months):
+
+| Metric | Mean (grid − ERA5) | MAE | Median \|err\| | p90 \|err\| |
+|---|---|---|---|---|
+| `monthly.tmean` vs ERA5 `(tmin + tmax) / 2` | +0.31 °C | 0.72 °C | 0.53 °C | 1.49 °C |
+| `monthly.tmin` vs ERA5 `tmin` | +0.02 °C | 0.55 °C | 0.34 °C | 1.27 °C |
+| `2 * tmean - tmin` vs ERA5 `tmax` | +0.59 °C | 1.22 °C | 0.90 °C | 2.61 °C |
+
+The symmetric approximation `2 * tmean - tmin` tracks ERA5 monthly `tmax` with
+0.90 °C median error (1.22 °C MAE), confirming that omitting a separate
+`monthly.tmax` band saves ~20 MB with acceptable accuracy (larger errors occur
+where Beck `tmean` and CHELSA `tasmin` diverge in coastal/high-latitude cells
+such as Reykjavik, Nuuk, Osaka, and Riyadh).
+
+### Monthly precipitation (`v0.4.0`)
+
+Global build-report invariants across 2,171,421 climate cells (358,004
+0.25°-grid cells in 438 tiles, 9.04 MB total):
+
+- Wettest-month agreement with 0.1° Beck precipitation: **99.66 %** (gate ≥ 95 %).
+- Driest-month agreement with 0.1° Beck precipitation: **99.93 %** (gate ≥ 95 %).
+- Against ERA5 across the 29 validation cities: **29 / 29** wettest-month and
+  **29 / 29** driest-month agreement (within 15 mm for near-ties).
 
 ## Site layers
 

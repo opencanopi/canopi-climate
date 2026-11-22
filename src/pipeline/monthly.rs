@@ -370,7 +370,7 @@ pub fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
             compression: "deflate".into(),
             interleave: "pixel".into(),
             bands: MONTHLY_BANDS as u32,
-            band_order: "bands 0..36 = tmean (slot*12 + month); 36..72 = tmin (36 + slot*12 + month); 72..75 = dry_mask (72 + slot)".into(),
+            band_order: "band, slot, month".into(),
         },
         bands: vec![
             VariableSpec {
@@ -391,7 +391,7 @@ pub fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
             },
             VariableSpec {
                 id: "dry_mask".into(),
-                unit: "bitmask".into(),
+                unit: "bits".into(),
                 scale: 1.0,
                 offset: 0.0,
                 description: "Gaussen dry-month bitmask (gaussen_p_lt_2t): bit m (0..11 = Jan..Dec) is set where unrounded Beck P < 2*T; bits 12..14 = 0, bit 15 never set".into(),

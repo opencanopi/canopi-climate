@@ -157,6 +157,7 @@ pub fn register(out: &Path, layer: LayerSpec, report: Value) -> Result<()> {
     let mut m = read_manifest(out)?;
     m.format_version = crate::manifest::FORMAT_VERSION;
     m.builder_version = env!("CARGO_PKG_VERSION").into();
+    m.dry_month_rule = Some(crate::manifest::DRY_MONTH_RULE.into());
     let id = layer.id.clone();
     m.layers.retain(|l| l.id != id);
     m.layers.push(layer);

@@ -90,7 +90,7 @@ pub fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
             compression: "deflate".into(),
             interleave: "pixel".into(),
             bands: PRECIP_BANDS as u32,
-            band_order: "band (0-based) = slot_index * 12 + month_index".into(),
+            band_order: "band, slot, month".into(),
         },
         bands: vec![VariableSpec {
             id: "precip".into(),
