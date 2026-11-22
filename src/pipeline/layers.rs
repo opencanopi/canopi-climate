@@ -295,6 +295,7 @@ mod tests {
             scale: 1.0,
             offset: 0.0,
             description: "x".into(),
+            months: None,
         };
         let layer = LayerSpec {
             id: "soil".into(),
@@ -308,6 +309,7 @@ mod tests {
             tiles: specs,
             notes: vec![],
             slots: vec![],
+            version: None,
         };
         register(&out, layer.clone(), json!({"ok": 1})).unwrap();
         register(&out, layer, json!({"ok": 2})).unwrap();

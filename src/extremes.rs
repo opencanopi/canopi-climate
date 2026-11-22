@@ -15,9 +15,10 @@
 
 use serde::Serialize;
 
-use crate::grid::{CELL_DEG, Cell, TILE_CELLS, TILE_LEN, TileId};
+use crate::grid::{Cell, TILE_LEN, TileId};
 use crate::lookup::LookupError;
 use crate::model::{NODATA, SLOTS, quantize};
+use crate::raster::{LayerGrid, Raster};
 use crate::tile::TileError;
 
 /// Directory of the layer's tiles, relative to the manifest.
@@ -96,9 +97,7 @@ pub const fn band(var: Extreme, slot: usize) -> usize {
 /// A decoded extremes tile: [`TILE_LEN`] cells x [`EXTREMES_BANDS`] values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtremesTile {
-    id: TileId,
-    /// Pixel-interleaved: `data[cell * EXTREMES_BANDS + band]`.
-    data: Vec<i16>,
+    raster: Raster,
 }
 
 impl ExtremesTile {
@@ -107,14 +106,15 @@ impl ExtremesTile {
     /// # Errors
     /// [`TileError::Layout`] when `data` has the wrong length.
     pub fn new(id: TileId, data: Vec<i16>) -> Result<Self, TileError> {
-        if data.len() != TILE_LEN * EXTREMES_BANDS {
-            return Err(TileError::Layout(format!(
-                "{} values, expected {}",
-                data.len(),
-                TILE_LEN * EXTREMES_BANDS
-            )));
-        }
-        Ok(Self { id, data })
+        Ok(Self {
+            raster: Raster::new(id, LayerGrid::CLIMATE, EXTREMES_BANDS, data)?,
+        })
+    }
+
+    /// Underlying generic raster.
+    #[must_use]
+    pub const fn as_raster(&self) -> &Raster {
+        &self.raster
     }
 
     /// Decode a tile file (the whole file, as fetched).
@@ -122,34 +122,28 @@ impl ExtremesTile {
     /// # Errors
     /// [`TileError`] when the bytes are not an extremes tile.
     pub fn decode(bytes: &[u8]) -> Result<Self, TileError> {
-        let (id, data) = crate::tile::decode_raster(bytes, TILE_CELLS, CELL_DEG, EXTREMES_BANDS)?;
-        Self::new(id, data)
+        Ok(Self {
+            raster: Raster::decode(bytes, LayerGrid::CLIMATE, EXTREMES_BANDS)?,
+        })
     }
 
     /// The tile's position.
     #[must_use]
-    pub fn id(&self) -> TileId {
-        self.id
+    pub const fn id(&self) -> TileId {
+        self.raster.id()
     }
 
     /// One value; [`NODATA`] outside the tile.
     #[must_use]
     pub fn get(&self, index: usize, band: usize) -> i16 {
-        if band >= EXTREMES_BANDS {
-            return NODATA;
-        }
-        self.data
-            .get(index * EXTREMES_BANDS + band)
-            .copied()
-            .unwrap_or(NODATA)
+        self.raster.get(index, band)
     }
 
     /// Whether a cell has every band.
     #[must_use]
     pub fn has(&self, index: usize) -> bool {
-        self.data
-            .get(index * EXTREMES_BANDS..(index + 1) * EXTREMES_BANDS)
-            .is_some_and(|p| p.iter().all(|&v| v != NODATA))
+        let p = self.raster.pixel(index);
+        !p.is_empty() && p.iter().all(|&v| v != NODATA)
     }
 
     /// Cells with every band.
@@ -161,7 +155,7 @@ impl ExtremesTile {
     /// The pixel-interleaved values.
     #[must_use]
     pub fn data(&self) -> &[i16] {
-        &self.data
+        self.raster.data()
     }
 }
 

@@ -327,6 +327,7 @@ pub(crate) fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
         scale: 1.0,
         offset: 0.0,
         description: description.into(),
+        months: None,
     };
     LayerSpec {
         id: "regions".into(),
@@ -348,6 +349,7 @@ pub(crate) fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
             "Tiles where neither band has a code are absent.".into(),
         ],
         slots: vec![],
+        version: Some(env!("CARGO_PKG_VERSION").into()),
     }
 }
 

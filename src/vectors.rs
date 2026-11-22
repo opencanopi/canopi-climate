@@ -15,6 +15,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::derived::{MonthlySummary, dry_month_mask};
 use crate::extremes::{self, ExtremesLookup, ExtremesTile};
 use crate::grid::TileId;
 use crate::koppen;
@@ -223,6 +224,107 @@ const TEXTURE_CASES: [(f64, f64); 19] = [
     (-1.0, 10.0),
 ];
 
+/// 10-row Gaussen dry-month rule cases (`gaussen_p_lt_2t`, docs/format.md):
+/// Seville-like, P = 2T exact, P = 2T - 0.1, boreal T < 0 with P = 0,
+/// T = 0 with P = 0, hot desert (12 dry), humid tropics (0 dry), bimodal
+/// (Nairobi/Kiambu-like), southern hemisphere dry winter (Mendoza-like),
+/// and a non-finite cell.
+const DRY_MONTH_CASES: [(&str, [f32; 12], [f32; 12]); 10] = [
+    (
+        "seville_like_csa",
+        [
+            11.0, 12.5, 15.0, 17.0, 20.5, 25.0, 28.0, 27.5, 24.0, 19.5, 14.5, 11.5,
+        ],
+        [
+            65.0, 55.0, 45.0, 50.0, 30.0, 10.0, 2.0, 4.0, 25.0, 65.0, 75.0, 80.0,
+        ],
+    ),
+    (
+        "exact_boundary_p_eq_2t",
+        [
+            10.0, 10.0, 10.0, 10.0, 10.0, 15.0, 20.0, 15.0, 10.0, 10.0, 10.0, 10.0,
+        ],
+        [
+            50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 40.0, 50.0, 50.0, 50.0, 50.0, 50.0,
+        ],
+    ),
+    (
+        "just_below_boundary_p_lt_2t",
+        [
+            10.0, 10.0, 10.0, 10.0, 10.0, 15.0, 20.0, 15.0, 10.0, 10.0, 10.0, 10.0,
+        ],
+        [
+            50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 39.9, 50.0, 50.0, 50.0, 50.0, 50.0,
+        ],
+    ),
+    (
+        "boreal_negative_t_zero_p",
+        [
+            -10.0, -9.5, -5.0, 1.5, 8.0, 13.5, 16.5, 14.5, 9.0, 3.0, -3.0, -7.5,
+        ],
+        [
+            0.0, 0.0, 0.0, 25.0, 35.0, 50.0, 65.0, 60.0, 45.0, 40.0, 0.0, 0.0,
+        ],
+    ),
+    ("zero_t_zero_p", [0.0; 12], [0.0; 12]),
+    (
+        "hot_desert_riyadh_like",
+        [
+            14.5, 17.0, 21.5, 27.0, 32.5, 35.5, 37.0, 36.5, 33.5, 28.0, 21.0, 16.0,
+        ],
+        [
+            10.0, 8.0, 18.0, 20.0, 5.0, 0.0, 0.0, 0.0, 0.0, 2.0, 8.0, 10.0,
+        ],
+    ),
+    (
+        "humid_tropics_manaus_like",
+        [
+            26.5, 26.5, 26.5, 26.5, 26.5, 26.5, 27.0, 27.5, 28.0, 28.0, 27.5, 27.0,
+        ],
+        [
+            260.0, 280.0, 310.0, 300.0, 250.0, 120.0, 85.0, 65.0, 75.0, 120.0, 175.0, 225.0,
+        ],
+    ),
+    (
+        "bimodal_nairobi_like",
+        [
+            19.5, 20.5, 20.5, 20.0, 19.0, 17.5, 17.0, 17.5, 18.5, 19.5, 19.0, 19.0,
+        ],
+        [
+            35.0, 38.0, 95.0, 185.0, 145.0, 40.0, 15.0, 20.0, 25.0, 55.0, 130.0, 85.0,
+        ],
+    ),
+    (
+        "southern_hemisphere_mendoza_like",
+        [
+            25.0, 23.5, 20.5, 16.0, 11.5, 8.0, 7.5, 10.5, 14.0, 18.0, 21.5, 24.0,
+        ],
+        [
+            55.0, 50.0, 45.0, 18.0, 10.0, 5.0, 6.0, 8.0, 14.0, 20.0, 35.0, 50.0,
+        ],
+    ),
+    (
+        "non_finite_value",
+        [
+            10.0, 12.0, 15.0, 18.0, 22.0, 25.0, 27.0, 26.0, 22.0, 18.0, 14.0, 11.0,
+        ],
+        [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            f32::NAN,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+        ],
+    ),
+];
+
 fn round1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
@@ -325,7 +427,27 @@ pub fn tables() -> Value {
         "codes": { "encode": encode, "decode": decode_codes },
         "decode": decode,
         "usda": usda,
+        "dry_month": dry_month_table(),
     })
+}
+
+fn dry_month_table() -> Vec<Value> {
+    DRY_MONTH_CASES
+        .iter()
+        .map(|(name, t, p)| {
+            let mask = dry_month_mask(t, p);
+            let dry_months = MonthlySummary::new(t, p, 0.0).map(|s| s.dry_months);
+            let t_json: Vec<Option<f64>> = t.iter().map(|&v| short(v)).collect();
+            let p_json: Vec<Option<f64>> = p.iter().map(|&v| short(v)).collect();
+            json!({
+                "name": name,
+                "t": t_json,
+                "p": p_json,
+                "mask": mask,
+                "dry_months": dry_months,
+            })
+        })
+        .collect()
 }
 
 /// Serialise vectors with one point or table row per line (reviewable
@@ -536,6 +658,40 @@ mod tests {
         assert_eq!(t["codes"]["encode"][0]["stored"], 5 * 676 + 17 * 26);
         assert_eq!(t["decode"][0]["value"], -12.3);
         assert_eq!(t["decode"][3]["value"], Value::Null);
+    }
+
+    #[test]
+    fn dry_month_vectors_match_monthly_summary() {
+        let t = tables();
+        let dry = t["dry_month"].as_array().unwrap();
+        assert_eq!(dry.len(), 10);
+        assert_eq!(dry[0]["mask"], 0x01F0);
+        assert_eq!(dry[0]["dry_months"], 5);
+        assert_eq!(dry[1]["mask"], 0);
+        assert_eq!(dry[1]["dry_months"], 0);
+        assert_eq!(dry[2]["mask"], 1 << 6);
+        assert_eq!(dry[2]["dry_months"], 1);
+        assert_eq!(dry[3]["mask"], 0);
+        assert_eq!(dry[4]["mask"], 0);
+        assert_eq!(dry[5]["mask"], 0x0FFF);
+        assert_eq!(dry[5]["dry_months"], 12);
+        assert_eq!(dry[6]["mask"], 0);
+        assert_eq!(dry[7]["mask"], 0x01C3);
+        assert_eq!(dry[7]["dry_months"], 5);
+        assert_eq!(dry[9]["mask"], Value::Null);
+        assert_eq!(dry[9]["dry_months"], Value::Null);
+        for (i, (_, t_arr, p_arr)) in DRY_MONTH_CASES.iter().enumerate() {
+            let sum = MonthlySummary::new(t_arr, p_arr, 0.0);
+            let mask = dry_month_mask(t_arr, p_arr);
+            assert_eq!(
+                sum.map(|s| u32::from(s.dry_months)),
+                mask.map(i16::count_ones),
+                "case {i}"
+            );
+            if let Some(m) = mask {
+                assert_eq!(m & !0x0FFF, 0, "reserved/sign bits must be 0 in case {i}");
+            }
+        }
     }
 
     #[test]

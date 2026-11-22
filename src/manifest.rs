@@ -8,6 +8,8 @@ pub const FORMAT: &str = "canopi-climate-grid";
 /// meaning of existing ones keep the version, so older readers still work
 /// (they ignore unknown fields): [`Manifest::layers`] (0.2.0) is optional.
 pub const FORMAT_VERSION: u32 = 1;
+/// Identifier of the Gaussen dry-month rule (`P < 2 * T`, docs/format.md).
+pub const DRY_MONTH_RULE: &str = "gaussen_p_lt_2t";
 
 /// The manifest of a grid release.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,6 +36,9 @@ pub struct Manifest {
     pub tiles: Vec<TileSpec>,
     /// Notes on methods and known limits.
     pub notes: Vec<String>,
+    /// Identifier of the dry-month rule (`gaussen_p_lt_2t`; optional for older manifests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_month_rule: Option<String>,
     /// Optional layers, each with its own grid and tiles (absent before 0.2.0; optional).
     #[serde(default)]
     pub layers: Vec<LayerSpec>,
@@ -64,10 +69,56 @@ pub struct LayerSpec {
     /// Notes on methods and known limits.
     pub notes: Vec<String>,
     /// The (period, scenario) slots of a layer whose bands repeat per slot
-    /// (`extremes`, 0.3.0); absent for a static layer. Band
-    /// `band_index * slots.len() + slot` holds band `band_index` for `slot`.
+    /// (`extremes`, `monthly`, `monthly_precip`); absent for a static layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slots: Vec<SlotSpec>,
+    /// Optional layer-specific version (incremented when rebuilt alone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl LayerSpec {
+    /// Number of slots (`1` for a static layer whose `slots` list is empty).
+    #[must_use]
+    pub fn slot_count(&self) -> usize {
+        self.slots.len().max(1)
+    }
+
+    /// 0-based band index under `band_order: "band, slot, month"`:
+    /// `start(band) + slot * months(band) + month` (`months` counted as 1 when
+    /// absent), where `start(band)` is the sum of `slot_count * months` of all
+    /// preceding bands. Returns `None` if `band`, `slot`, or `month` is out of
+    /// range.
+    #[must_use]
+    pub fn band_index(&self, band: usize, slot: usize, month: usize) -> Option<usize> {
+        let slots = self.slot_count();
+        let target = self.bands.get(band)?;
+        let target_months = usize::from(target.months.unwrap_or(1));
+        if slot >= slots || target_months == 0 || month >= target_months {
+            return None;
+        }
+        let mut start = 0usize;
+        for b in &self.bands[..band] {
+            let m = usize::from(b.months.unwrap_or(1));
+            if m == 0 {
+                return None;
+            }
+            start = start.checked_add(slots.checked_mul(m)?)?;
+        }
+        start
+            .checked_add(slot.checked_mul(target_months)?)?
+            .checked_add(month)
+    }
+
+    /// Total bands per tile implied by `bands` and `slots`.
+    #[must_use]
+    pub fn total_bands(&self) -> usize {
+        let slots = self.slot_count();
+        self.bands
+            .iter()
+            .map(|b| slots * usize::from(b.months.unwrap_or(1)))
+            .sum()
+    }
 }
 
 /// Grid geometry.
@@ -119,6 +170,9 @@ pub struct VariableSpec {
     pub offset: f32,
     /// Description and derivation.
     pub description: String,
+    /// Months per slot for a monthly band (12); absent for non-monthly bands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub months: Option<u8>,
 }
 
 /// A (period, scenario) slot.
@@ -192,5 +246,62 @@ mod tests {
         };
         let s = serde_json::to_string(&t).unwrap();
         assert_eq!(serde_json::from_str::<TileSpec>(&s).unwrap(), t);
+    }
+
+    #[test]
+    fn layer_spec_band_index_matches_band_slot_month_order() {
+        let mk = |id: &str, months: Option<u8>| VariableSpec {
+            id: id.into(),
+            unit: "°C".into(),
+            scale: 0.5,
+            offset: 0.0,
+            description: String::new(),
+            months,
+        };
+        let slot = |p: &str, s: &str| SlotSpec {
+            period: p.into(),
+            scenario: s.into(),
+            scenario_label: s.into(),
+        };
+        let layer = LayerSpec {
+            id: "monthly".into(),
+            description: String::new(),
+            cell_deg: 0.1,
+            tile_cells: 100,
+            directory: "monthly".into(),
+            encoding: Encoding {
+                container: String::new(),
+                sample_format: "int16".into(),
+                nodata: -32768,
+                compression: "deflate".into(),
+                interleave: "pixel".into(),
+                bands: 75,
+                band_order: "band, slot, month".into(),
+            },
+            bands: vec![
+                mk("tmean", Some(12)),
+                mk("tmin", Some(12)),
+                mk("dry_mask", None),
+            ],
+            sources: vec![],
+            tiles: vec![],
+            notes: vec![],
+            slots: vec![
+                slot("1991-2020", "historical"),
+                slot("2041-2070", "ssp245"),
+                slot("2071-2099", "ssp245"),
+            ],
+            version: Some("0.4.0".into()),
+        };
+        assert_eq!(layer.total_bands(), 75);
+        assert_eq!(layer.band_index(0, 0, 0), Some(0));
+        assert_eq!(layer.band_index(0, 2, 11), Some(35));
+        assert_eq!(layer.band_index(1, 0, 0), Some(36));
+        assert_eq!(layer.band_index(1, 2, 11), Some(71));
+        assert_eq!(layer.band_index(2, 0, 0), Some(72));
+        assert_eq!(layer.band_index(2, 2, 0), Some(74));
+        assert_eq!(layer.band_index(2, 0, 1), None);
+        assert_eq!(layer.band_index(0, 3, 0), None);
+        assert_eq!(layer.band_index(3, 0, 0), None);
     }
 }

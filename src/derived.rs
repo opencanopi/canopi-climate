@@ -73,19 +73,35 @@ pub struct MonthlySummary {
     pub koppen_of_means: Option<u8>,
 }
 
+/// Gaussen dry-month bitmask (`gaussen_p_lt_2t`, docs/format.md): bit `m`
+/// (`0..12`, January…December) is set when `p[m] < 2.0 * t[m]`. Bits 12–14
+/// are reserved (written 0) and bit 15 is never set. Returns `None` if any
+/// temperature or precipitation value is non-finite.
+#[must_use]
+pub fn dry_month_mask(t: &[f32; 12], p: &[f32; 12]) -> Option<i16> {
+    if t.iter().chain(p.iter()).any(|x| !x.is_finite()) {
+        return None;
+    }
+    let mut mask = 0i16;
+    for m in 0..12 {
+        if p[m] < 2.0 * t[m] {
+            mask |= 1i16 << m;
+        }
+    }
+    Some(mask)
+}
+
 impl MonthlySummary {
     /// Summarise 12 monthly means at a latitude; `None` if any value is not
     /// finite.
     #[must_use]
     pub fn new(t: &[f32; 12], p: &[f32; 12], lat_deg: f64) -> Option<Self> {
-        if t.iter().chain(p.iter()).any(|x| !x.is_finite()) {
-            return None;
-        }
+        let mask = dry_month_mask(t, p)?;
         let precip: f32 = p.iter().sum();
         let pet = thornthwaite_pet(t, lat_deg);
         let aridity = (pet >= ARIDITY_MIN_PET_MM)
             .then(|| (f64::from(precip) / pet).min(f64::from(ARIDITY_CAP)) as f32);
-        let dry = (0..12).filter(|&m| p[m] < 2.0 * t[m]).count();
+        let dry = mask.count_ones();
         Some(Self {
             tmean_cold: t.iter().copied().fold(f32::INFINITY, f32::min),
             tmean_warm: t.iter().copied().fold(f32::NEG_INFINITY, f32::max),

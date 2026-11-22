@@ -10,8 +10,9 @@ use std::io::Cursor;
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::tags::Tag;
 
-use crate::grid::{CELL_DEG, TILE_CELLS, TILE_LEN, TileId};
+use crate::grid::{TILE_LEN, TileId};
 use crate::model::{BANDS, NODATA, SLOTS, Variable};
+use crate::raster::{LayerGrid, Raster};
 
 /// Why a tile could not be decoded.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -36,9 +37,7 @@ impl From<tiff::TiffError> for TileError {
 /// A decoded tile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tile {
-    id: TileId,
-    /// Pixel-interleaved: `data[cell * BANDS + band]`.
-    data: Vec<i16>,
+    raster: Raster,
 }
 
 impl Tile {
@@ -47,40 +46,33 @@ impl Tile {
     /// # Errors
     /// [`TileError::Layout`] if the length is wrong.
     pub fn new(id: TileId, data: Vec<i16>) -> Result<Self, TileError> {
-        if data.len() != TILE_LEN * BANDS {
-            return Err(TileError::Layout(format!(
-                "{} values, expected {}",
-                data.len(),
-                TILE_LEN * BANDS
-            )));
-        }
-        Ok(Self { id, data })
+        Ok(Self {
+            raster: Raster::new(id, LayerGrid::CLIMATE, BANDS, data)?,
+        })
+    }
+
+    /// Underlying generic raster.
+    #[must_use]
+    pub const fn as_raster(&self) -> &Raster {
+        &self.raster
     }
 
     /// The tile's position in the grid.
     #[must_use]
-    pub fn id(&self) -> TileId {
-        self.id
+    pub const fn id(&self) -> TileId {
+        self.raster.id()
     }
 
     /// All bands of a cell (row-major index inside the tile).
     #[must_use]
     pub fn pixel(&self, index: usize) -> &[i16] {
-        self.data
-            .get(index * BANDS..(index + 1) * BANDS)
-            .unwrap_or(&[])
+        self.raster.pixel(index)
     }
 
     /// One stored value, [`NODATA`] outside the tile.
     #[must_use]
     pub fn get(&self, index: usize, band: usize) -> i16 {
-        if band >= BANDS {
-            return NODATA;
-        }
-        self.data
-            .get(index * BANDS + band)
-            .copied()
-            .unwrap_or(NODATA)
+        self.raster.get(index, band)
     }
 
     /// Whether a cell has every variable for every slot.
@@ -103,7 +95,7 @@ impl Tile {
     /// The pixel-interleaved values.
     #[must_use]
     pub fn data(&self) -> &[i16] {
-        &self.data
+        self.raster.data()
     }
 
     /// Decode a tile file (the whole file, as fetched).
@@ -111,8 +103,9 @@ impl Tile {
     /// # Errors
     /// [`TileError`] when the bytes are not a grid tile.
     pub fn decode(bytes: &[u8]) -> Result<Self, TileError> {
-        let (id, data) = decode_raster(bytes, TILE_CELLS, CELL_DEG, BANDS)?;
-        Ok(Self { id, data })
+        Ok(Self {
+            raster: Raster::decode(bytes, LayerGrid::CLIMATE, BANDS)?,
+        })
     }
 }
 
@@ -329,7 +322,8 @@ fn georef_tile<R: std::io::Read + std::io::Seek>(
 pub(crate) mod synthetic {
     //! A deterministic synthetic tile for tests (also the committed fixture).
 
-    use super::{BANDS, NODATA, TILE_CELLS, TILE_LEN, Tile, TileId};
+    use super::{BANDS, NODATA, TILE_LEN, Tile, TileId};
+    use crate::grid::TILE_CELLS;
     use crate::model::{SLOTS, VARIABLES, Variable, band};
 
     /// Land: a block in the middle plus the four corner cells and an
@@ -372,13 +366,14 @@ pub(crate) mod synthetic {
         }
         // The island misses its 2071-2099 SSP5-8.5 precipitation.
         data[(5 * TILE_CELLS + 5) * BANDS + band(5, 8)] = NODATA;
-        Tile { id, data }
+        Tile::new(id, data).expect("valid synthetic tile")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::TILE_CELLS;
 
     const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/synthetic-n50e000.tif");
 

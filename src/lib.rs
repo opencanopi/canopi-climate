@@ -30,6 +30,7 @@ pub mod layer;
 pub mod lookup;
 pub mod manifest;
 pub mod model;
+pub mod raster;
 pub mod regions;
 pub mod soil;
 pub mod tile;

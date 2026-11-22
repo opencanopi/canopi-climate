@@ -244,6 +244,7 @@ fn band(id: &str, unit: &str, scale: f32, description: &str) -> VariableSpec {
         scale,
         offset: 0.0,
         description: description.into(),
+        months: None,
     }
 }
 
@@ -278,6 +279,7 @@ fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
             "Tiles without any soil value are absent.".into(),
         ],
         slots: vec![],
+        version: Some(env!("CARGO_PKG_VERSION").into()),
     }
 }
 

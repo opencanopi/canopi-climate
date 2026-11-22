@@ -9,10 +9,10 @@ use std::path::Path;
 use wbgeotiff::{CogWriter, Compression, GeoTransform};
 
 use super::{PipelineError, Result};
-use crate::extremes::{EXTREMES_BANDS, ExtremesTile};
-use crate::grid::{CELL_DEG, TILE_CELLS};
-use crate::layer::{LAYER_CELL_DEG, LAYER_TILE_CELLS, LayerTile};
-use crate::model::{BANDS, NODATA};
+use crate::extremes::ExtremesTile;
+use crate::layer::LayerTile;
+use crate::model::NODATA;
+use crate::raster::Raster;
 use crate::tile::Tile;
 
 /// Internal TIFF tile size; one internal tile covers the 100 x 100 raster.
@@ -20,32 +20,53 @@ use crate::tile::Tile;
 /// (docs/decisions/0001-tile-format.md).
 pub const INTERNAL_TILE: u32 = 112;
 
+/// Write any [`Raster`] as a COG at `path`.
+///
+/// # Errors
+/// Writer or I/O errors.
+pub fn write_raster(raster: &Raster, path: &Path) -> Result<()> {
+    let grid = raster.grid();
+    let id = raster.id();
+    let bands = u16::try_from(raster.bands()).map_err(|e| PipelineError::Data(e.to_string()))?;
+    let side = u32::try_from(grid.tile_cells()).map_err(|e| PipelineError::Data(e.to_string()))?;
+    let internal =
+        u32::try_from(grid.internal_tile()).map_err(|e| PipelineError::Data(e.to_string()))?;
+    let deg = grid.cell_deg();
+    CogWriter::new(side, side, bands)
+        .compression(Compression::Deflate)
+        .tile_size(internal)
+        .no_data(f64::from(NODATA))
+        .overview_levels(vec![])
+        .geo_transform(GeoTransform::north_up(id.west(), deg, id.north(), -deg))
+        .epsg(4326)
+        .write_i16(path, raster.data())?;
+    Ok(())
+}
+
+/// Write any [`Raster`] as a COG and read it back with the crate's reader;
+/// errors if the decoded raster differs.
+///
+/// # Errors
+/// Writer, reader or I/O errors, or a value mismatch.
+pub fn write_raster_checked(raster: &Raster, path: &Path) -> Result<Vec<u8>> {
+    write_raster(raster, path)?;
+    let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
+    let back = Raster::decode(&bytes, raster.grid(), raster.bands())?;
+    if back != *raster {
+        return Err(PipelineError::Raster(format!(
+            "{}: read-back differs from the written tile",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
 /// Write a tile as a COG at `path`.
 ///
 /// # Errors
 /// Writer or I/O errors.
 pub fn write_tile(tile: &Tile, path: &Path) -> Result<()> {
-    write_grid_tile(tile.id(), BANDS, tile.data(), path)
-}
-
-/// Write `bands` pixel-interleaved int16 bands of a 0.1-degree tile.
-fn write_grid_tile(id: crate::grid::TileId, bands: usize, data: &[i16], path: &Path) -> Result<()> {
-    let bands = u16::try_from(bands).map_err(|e| PipelineError::Data(e.to_string()))?;
-    let side = u32::try_from(TILE_CELLS).map_err(|e| PipelineError::Data(e.to_string()))?;
-    CogWriter::new(side, side, bands)
-        .compression(Compression::Deflate)
-        .tile_size(INTERNAL_TILE)
-        .no_data(f64::from(NODATA))
-        .overview_levels(vec![])
-        .geo_transform(GeoTransform::north_up(
-            id.west(),
-            CELL_DEG,
-            id.north(),
-            -CELL_DEG,
-        ))
-        .epsg(4326)
-        .write_i16(path, data)?;
-    Ok(())
+    write_raster(tile.as_raster(), path)
 }
 
 /// Write an `extremes` tile (0.1 degree, 18 bands) and read it back with
@@ -54,15 +75,7 @@ fn write_grid_tile(id: crate::grid::TileId, bands: usize, data: &[i16], path: &P
 /// # Errors
 /// Writer, reader or I/O errors, or a value mismatch.
 pub fn write_extremes_tile_checked(tile: &ExtremesTile, path: &Path) -> Result<Vec<u8>> {
-    write_grid_tile(tile.id(), EXTREMES_BANDS, tile.data(), path)?;
-    let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
-    if ExtremesTile::decode(&bytes)? != *tile {
-        return Err(PipelineError::Raster(format!(
-            "{}: read-back differs from the written tile",
-            path.display()
-        )));
-    }
-    Ok(bytes)
+    write_raster_checked(tile.as_raster(), path)
 }
 
 /// Write a tile and read it back with the crate's reader; errors if the
@@ -71,16 +84,7 @@ pub fn write_extremes_tile_checked(tile: &ExtremesTile, path: &Path) -> Result<V
 /// # Errors
 /// Writer, reader or I/O errors, or a value mismatch.
 pub fn write_tile_checked(tile: &Tile, path: &Path) -> Result<Vec<u8>> {
-    write_tile(tile, path)?;
-    let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
-    let back = Tile::decode(&bytes)?;
-    if back != *tile {
-        return Err(PipelineError::Raster(format!(
-            "{}: read-back differs from the written tile",
-            path.display()
-        )));
-    }
-    Ok(bytes)
+    write_raster_checked(tile.as_raster(), path)
 }
 
 /// Internal TIFF tile size of the site layers: 208 is the smallest multiple
@@ -93,37 +97,14 @@ pub const LAYER_INTERNAL_TILE: u32 = 208;
 /// # Errors
 /// Writer, reader or I/O errors, or a value mismatch.
 pub fn write_layer_tile_checked(tile: &LayerTile, path: &Path) -> Result<Vec<u8>> {
-    let id = tile.id();
-    let bands = u16::try_from(tile.bands()).map_err(|e| PipelineError::Data(e.to_string()))?;
-    let side = u32::try_from(LAYER_TILE_CELLS).map_err(|e| PipelineError::Data(e.to_string()))?;
-    CogWriter::new(side, side, bands)
-        .compression(Compression::Deflate)
-        .tile_size(LAYER_INTERNAL_TILE)
-        .no_data(f64::from(NODATA))
-        .overview_levels(vec![])
-        .geo_transform(GeoTransform::north_up(
-            id.west(),
-            LAYER_CELL_DEG,
-            id.north(),
-            -LAYER_CELL_DEG,
-        ))
-        .epsg(4326)
-        .write_i16(path, tile.data())?;
-    let bytes = std::fs::read(path).map_err(|e| PipelineError::io(path, e))?;
-    let back = LayerTile::decode(&bytes, tile.bands())?;
-    if back != *tile {
-        return Err(PipelineError::Raster(format!(
-            "{}: read-back differs from the written tile",
-            path.display()
-        )));
-    }
-    Ok(bytes)
+    write_raster_checked(tile.as_raster(), path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::grid::TileId;
+    use crate::model::BANDS;
     use crate::tile::synthetic;
 
     const FIXTURE: &str = concat!(

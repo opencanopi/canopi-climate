@@ -14,7 +14,7 @@
 
 use crate::grid::{TILES_X, TILES_Y, TileId, grid_index};
 use crate::lookup::LookupError;
-use crate::model::NODATA;
+use crate::raster::{LayerGrid, Raster};
 use crate::tile::TileError;
 
 /// Layer cell size in degrees.
@@ -110,10 +110,7 @@ impl LayerCell {
 /// A decoded layer tile: [`LAYER_TILE_LEN`] cells x `bands` `i16` values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerTile {
-    id: TileId,
-    bands: usize,
-    /// Pixel-interleaved: `data[cell * bands + band]`.
-    data: Vec<i16>,
+    raster: Raster,
 }
 
 impl LayerTile {
@@ -122,13 +119,15 @@ impl LayerTile {
     /// # Errors
     /// [`TileError::Layout`] if the length is not `LAYER_TILE_LEN * bands`.
     pub fn new(id: TileId, bands: usize, data: Vec<i16>) -> Result<Self, TileError> {
-        if bands == 0 || data.len() != LAYER_TILE_LEN * bands {
-            return Err(TileError::Layout(format!(
-                "{} values for {bands} bands",
-                data.len()
-            )));
-        }
-        Ok(Self { id, bands, data })
+        Ok(Self {
+            raster: Raster::new(id, LayerGrid::SITE, bands, data)?,
+        })
+    }
+
+    /// Underlying generic raster.
+    #[must_use]
+    pub const fn as_raster(&self) -> &Raster {
+        &self.raster
     }
 
     /// Decode a layer tile file holding `bands` bands.
@@ -136,39 +135,33 @@ impl LayerTile {
     /// # Errors
     /// [`TileError`] when the bytes are not such a tile.
     pub fn decode(bytes: &[u8], bands: usize) -> Result<Self, TileError> {
-        let (id, data) =
-            crate::tile::decode_raster(bytes, LAYER_TILE_CELLS, LAYER_CELL_DEG, bands)?;
-        Self::new(id, bands, data)
+        Ok(Self {
+            raster: Raster::decode(bytes, LayerGrid::SITE, bands)?,
+        })
     }
 
     /// The tile's position.
     #[must_use]
-    pub fn id(&self) -> TileId {
-        self.id
+    pub const fn id(&self) -> TileId {
+        self.raster.id()
     }
 
     /// Bands per cell.
     #[must_use]
-    pub fn bands(&self) -> usize {
-        self.bands
+    pub const fn bands(&self) -> usize {
+        self.raster.bands()
     }
 
     /// One value; [`NODATA`] outside the tile.
     #[must_use]
     pub fn get(&self, index: usize, band: usize) -> i16 {
-        if band >= self.bands {
-            return NODATA;
-        }
-        self.data
-            .get(index * self.bands + band)
-            .copied()
-            .unwrap_or(NODATA)
+        self.raster.get(index, band)
     }
 
     /// The pixel-interleaved values.
     #[must_use]
     pub fn data(&self) -> &[i16] {
-        &self.data
+        self.raster.data()
     }
 
     /// Cells where `has_data` holds.
@@ -329,11 +322,7 @@ pub(crate) mod synthetic {
                 data[i * SOIL_BANDS..(i + 1) * SOIL_BANDS].copy_from_slice(&v);
             }
         }
-        LayerTile {
-            id,
-            bands: SOIL_BANDS,
-            data,
-        }
+        LayerTile::new(id, SOIL_BANDS, data).expect("valid synthetic soil tile")
     }
 
     /// Regions: "FRA"/"FR" west of 3 E, "SWI"/"CH" east of it on land.
@@ -349,11 +338,7 @@ pub(crate) mod synthetic {
             data[j * 2] = encode_code(l3).unwrap_or(NODATA);
             data[j * 2 + 1] = encode_code(a2).unwrap_or(NODATA);
         }
-        LayerTile {
-            id,
-            bands: REGION_BANDS,
-            data,
-        }
+        LayerTile::new(id, REGION_BANDS, data).expect("valid synthetic regions tile")
     }
 }
 
@@ -361,6 +346,7 @@ pub(crate) mod synthetic {
 mod tests {
     use super::*;
     use crate::grid::Cell;
+    use crate::model::NODATA;
 
     #[test]
     fn cells_nest_in_the_climate_grid() {

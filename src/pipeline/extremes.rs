@@ -343,6 +343,7 @@ fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
                 scale: crate::extremes::SCALE,
                 offset: 0.0,
                 description: e.description().into(),
+                months: None,
             })
             .collect(),
         sources: vec!["era5-land".into(), "nex-gddp-cmip6".into()],
@@ -364,6 +365,7 @@ fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
                 scenario_label: s.scenario.label().into(),
             })
             .collect(),
+        version: Some(env!("CARGO_PKG_VERSION").into()),
     }
 }
 

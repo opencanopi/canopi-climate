@@ -536,6 +536,7 @@ pub fn manifest(tiles: Vec<TileSpec>) -> Manifest {
                     scale: i.scale,
                     offset: i.offset,
                     description: i.description.into(),
+                    months: None,
                 }
             })
             .collect(),
@@ -550,6 +551,7 @@ pub fn manifest(tiles: Vec<TileSpec>) -> Manifest {
         sources: sources::manifest_sources("climate"),
         tiles,
         notes: notes(),
+        dry_month_rule: Some(manifest::DRY_MONTH_RULE.into()),
         layers: Vec::new(),
     }
 }
