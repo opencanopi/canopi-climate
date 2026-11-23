@@ -60,12 +60,16 @@ pub enum Stage {
     FrostCalendar,
     /// Binary index: `analogues.bin` for 2050 Climate Twin k-NN search (after `tiles`, `monthly`, `monthly-precip`, `regions`).
     Analogues,
+    /// Layer: static 5-band Fishman Dynamic Chill Portions warming curve (after `tiles`).
+    Phenology,
+    /// Layer: static TerraClimate CWD/VPD + ERA5-Land CDD water balance (after `tiles`).
+    WaterBalance,
     /// Compare the delta method with CHELSA's own projections.
     CheckFuture,
 }
 
 /// Stages run by default, in order.
-pub const DEFAULT_STAGES: [Stage; 14] = [
+pub const DEFAULT_STAGES: [Stage; 16] = [
     Stage::Verify,
     Stage::Koppen,
     Stage::Chelsa,
@@ -80,6 +84,8 @@ pub const DEFAULT_STAGES: [Stage; 14] = [
     Stage::ExtremesTail,
     Stage::FrostCalendar,
     Stage::Analogues,
+    Stage::Phenology,
+    Stage::WaterBalance,
 ];
 
 /// Build settings.
@@ -184,6 +190,8 @@ pub fn run(cfg: &BuildConfig, stages: &[Stage]) -> Result<()> {
             Stage::ExtremesTail => super::extremes_tail::stage_extremes_tail(cfg)?,
             Stage::FrostCalendar => super::frost_calendar::stage_frost_calendar(cfg)?,
             Stage::Analogues => super::analogues::stage_analogues(cfg)?,
+            Stage::Phenology => super::phenology::run(cfg)?,
+            Stage::WaterBalance => super::water_balance::run(cfg)?,
             Stage::CheckFuture => stage_check_future(cfg)?,
         }
         eprintln!(

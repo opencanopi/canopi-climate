@@ -2,6 +2,8 @@
 //! the grid. Annual extremes and USDA hardiness zones live in
 //! [`crate::extremes`].
 
+use serde::Serialize;
+
 use crate::koppen;
 use crate::model::{ARIDITY_CAP, ARIDITY_MIN_PET_MM};
 
@@ -12,13 +14,90 @@ const MID_MONTH_DOY: [f64; 12] = [
 /// Mean days per month (February averaged over leap years).
 const DAYS_IN_MONTH: [f64; 12] = [31., 28.25, 31., 30., 31., 30., 31., 31., 30., 31., 30., 31.];
 
-/// Day length (hours) at a latitude on a day of year (FAO-56 eq. 24, 25, 34).
+/// Solar obliquity (radians) used by FAO-56 eq. 24.
+const MAX_DECLINATION_RAD: f64 = 0.409;
+
+/// Day length (hours) at a latitude on a day of year (FAO-56 eq. 24, 25, 34),
+/// hardened at the exact poles (`|lat_deg| >= 90°`) against `tan(±90°)` overflow.
 #[must_use]
 pub fn day_length_hours(lat_deg: f64, doy: f64) -> f64 {
+    let declination = MAX_DECLINATION_RAD * (2.0 * std::f64::consts::PI * doy / 365.0 - 1.39).sin();
+    day_length_for_declination(lat_deg, declination)
+}
+
+fn day_length_for_declination(lat_deg: f64, declination: f64) -> f64 {
+    if lat_deg.abs() >= 90.0 {
+        let prod = lat_deg * declination;
+        return if prod > 0.0 {
+            24.0
+        } else if prod < 0.0 {
+            0.0
+        } else {
+            12.0
+        };
+    }
     let phi = lat_deg.to_radians();
-    let declination = 0.409 * (2.0 * std::f64::consts::PI * doy / 365.0 - 1.39).sin();
     let x = (-phi.tan() * declination.tan()).clamp(-1.0, 1.0);
     24.0 * x.acos() / std::f64::consts::PI
+}
+
+/// Annual photoperiod summary at a latitude (FAO-56 geometric daylength,
+/// 0 bytes stored in the grid).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Photoperiod {
+    /// Shortest day of the year (hours, analytical at `|δ| = 0.409` rad).
+    pub min_hours: f64,
+    /// Longest day of the year (hours, analytical at `|δ| = 0.409` rad).
+    pub max_hours: f64,
+    /// Seasonal day-length amplitude `max_hours - min_hours` (hours).
+    pub amplitude_hours: f64,
+    /// Mid-month day length for January through December (hours).
+    pub monthly_hours: [f32; 12],
+    /// Days per 365-day year with 0 hours of geometric daylight (`<= 0.001` h).
+    pub polar_night_days: u16,
+    /// Days per 365-day year with 24 hours of geometric daylight (`>= 23.999` h).
+    pub midnight_sun_days: u16,
+}
+
+/// Compute the annual photoperiod summary for `lat_deg` (`-90.0..=90.0`).
+/// Returns `None` for non-finite coordinates or `|lat_deg| > 90.0`.
+#[must_use]
+pub fn photoperiod(lat_deg: f64) -> Option<Photoperiod> {
+    if !lat_deg.is_finite() || lat_deg.abs() > 90.0 {
+        return None;
+    }
+    let round2 = |x: f64| (x * 100.0).round() / 100.0;
+    let abs_lat = lat_deg.abs();
+    let min_raw = day_length_for_declination(abs_lat, -MAX_DECLINATION_RAD);
+    let max_raw = day_length_for_declination(abs_lat, MAX_DECLINATION_RAD);
+    let min_hours = round2(min_raw);
+    let max_hours = round2(max_raw);
+    let amplitude_hours = round2(max_raw - min_raw);
+
+    let mut monthly_hours = [0f32; 12];
+    for (m, &doy) in MID_MONTH_DOY.iter().enumerate() {
+        monthly_hours[m] = round2(day_length_hours(lat_deg, doy)) as f32;
+    }
+
+    let mut polar_night_days = 0u16;
+    let mut midnight_sun_days = 0u16;
+    for doy in 1..=365 {
+        let h = day_length_hours(lat_deg, f64::from(doy));
+        if h <= 0.001 {
+            polar_night_days += 1;
+        } else if h >= 23.999 {
+            midnight_sun_days += 1;
+        }
+    }
+
+    Some(Photoperiod {
+        min_hours,
+        max_hours,
+        amplitude_hours,
+        monthly_hours,
+        polar_night_days,
+        midnight_sun_days,
+    })
 }
 
 /// Thornthwaite (1948) annual potential evapotranspiration (mm) from 12
@@ -234,5 +313,43 @@ mod tests {
         bad[3] = f64::NAN;
         assert_eq!(gdd_base_10(&bad), None);
         assert_eq!(chill_months(&bad), None);
+    }
+
+    #[test]
+    fn photoperiod_covers_equator_hemispheres_and_poles() {
+        let eq = photoperiod(0.0).unwrap();
+        assert_eq!(eq.min_hours, 12.0);
+        assert_eq!(eq.max_hours, 12.0);
+        assert_eq!(eq.amplitude_hours, 0.0);
+        assert_eq!(eq.polar_night_days, 0);
+        assert_eq!(eq.midnight_sun_days, 0);
+
+        let nh = photoperiod(45.0).unwrap();
+        let sh = photoperiod(-45.0).unwrap();
+        // Exact NH/SH symmetry
+        assert_eq!(nh.min_hours, sh.min_hours);
+        assert_eq!(nh.max_hours, sh.max_hours);
+        assert!((nh.min_hours + nh.max_hours - 24.0).abs() < 1e-9);
+        assert!(nh.monthly_hours[5] > nh.monthly_hours[11]); // June > Dec in NH
+        assert!(sh.monthly_hours[11] > sh.monthly_hours[5]); // Dec > June in SH
+
+        // Exact poles hardened against tan(±90°)
+        let np = photoperiod(90.0).unwrap();
+        let sp = photoperiod(-90.0).unwrap();
+        assert_eq!(
+            (np.min_hours, np.max_hours, np.amplitude_hours),
+            (0.0, 24.0, 24.0)
+        );
+        assert_eq!(
+            (sp.min_hours, sp.max_hours, sp.amplitude_hours),
+            (0.0, 24.0, 24.0)
+        );
+        assert!(np.polar_night_days > 170 && np.midnight_sun_days > 170);
+        assert_eq!(np.polar_night_days + np.midnight_sun_days, 365);
+
+        // Out-of-domain rejected
+        assert_eq!(photoperiod(90.1), None);
+        assert_eq!(photoperiod(-90.1), None);
+        assert_eq!(photoperiod(f64::NAN), None);
     }
 }

@@ -155,6 +155,37 @@ assert.equal(cc.textureClass(70, 40), undefined);
   assert.equal(res.matches[0].match_quality, "close");
 }
 
+// v0.6.0: phenology, water_balance, photoperiod, and Saxton-Rawls AWC.
+const phenoBytes = fixture("synthetic-phenology-n50e000.tif");
+const pheno = cc.lookupPhenology(phenoBytes, 45.95, 5.05);
+assert.equal(pheno.tile, "n50e000");
+assert.equal(pheno.chill_portions_0c, 96);
+assert.equal(pheno.chill_portions_4c, 46);
+assert.throws(() => cc.lookupPhenology(phenoBytes, 10, 10));
+
+const wbBytes = fixture("synthetic-water-balance-n50e000.tif");
+const wb = cc.lookupWaterBalance(wbBytes, 45.95, 5.05);
+assert.equal(wb.tile, "n50e000");
+assert.equal(wb.cwd_mm, 340);
+assert.equal(wb.cwd_p90_mm, 465);
+assert.equal(wb.cdd_max_days, 22);
+assert.equal(wb.vpd_summer_kpa, 1.05);
+assert.throws(() => cc.lookupWaterBalance(wbBytes, 10, 10));
+
+const ppEq = cc.photoperiod(0);
+assert.equal(ppEq.min_hours, 12);
+assert.equal(ppEq.max_hours, 12);
+const ppPole = cc.photoperiod(90);
+assert.equal(ppPole.min_hours, 0);
+assert.equal(ppPole.max_hours, 24);
+assert.equal(cc.photoperiod(91), null);
+
+const awcLoam = cc.soilAwc(40, 20, undefined);
+assert.ok(awcLoam.awc_30cm_mm >= 35 && awcLoam.awc_30cm_mm <= 60);
+const awcSand = cc.soilAwc(100, 0, 0);
+assert.ok(awcSand.wilting_point >= 0.01);
+assert.equal(cc.soilAwc(70, 40, undefined), null);
+
 // The synthetic vectors (tests/fixtures/synthetic-expected.json, written by the crate's own
 // lookups): every point a single-tile reader can answer gives exactly the native answer. The
 // host fetches the point's own tile only (none outside n50e000 here).
@@ -178,11 +209,15 @@ for (const p of vectors.points) {
   got.extremes_tail = got.climate ? cc.lookupExtremesTail(extTailBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   got.frost_calendar = got.climate ? cc.lookupFrostCalendar(frostBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   got.monthly = got.climate ? cc.lookupMonthly(monBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
+  got.phenology = got.climate ? cc.lookupPhenology(phenoBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
+  got.water_balance = got.climate ? cc.lookupWaterBalance(wbBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   assert.deepStrictEqual(got.extremes, p.expect.extremes, `${p.name}: extremes`);
   assert.deepStrictEqual(got.extremes_tail, p.expect.extremes_tail, `${p.name}: extremes_tail`);
   assert.deepStrictEqual(got.frost_calendar, p.expect.frost_calendar, `${p.name}: frost_calendar`);
   assert.deepStrictEqual(got.monthly, p.expect.monthly, `${p.name}: monthly`);
   assert.deepStrictEqual(got.monthly_precip, p.expect.monthly_precip, `${p.name}: monthly_precip`);
+  assert.deepStrictEqual(got.phenology, p.expect.phenology, `${p.name}: phenology`);
+  assert.deepStrictEqual(got.water_balance, p.expect.water_balance, `${p.name}: water_balance`);
   assert.deepStrictEqual(got.climate, p.expect.climate, `${p.name}: climate`);
   assert.deepStrictEqual(got.soil, p.expect.soil, `${p.name}: soil`);
   if (own) assert.deepStrictEqual(got.regions, p.expect.regions, `${p.name}: regions`);

@@ -247,6 +247,81 @@ pub fn find_analogues_js(
     to_js(&result)
 }
 
+/// Decode a `phenology` tile and read the cell holding (`cellLat`, `cellLon`):
+/// pass the climate lookup's `cell_lat` and `cell_lon`. Returns the
+/// [`crate::phenology::PhenologyLookup`] as a plain object, or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a phenology tile, the coordinate is invalid
+/// or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupPhenology)]
+pub fn lookup_phenology_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::phenology::PhenologyTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::phenology::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Decode a `water_balance` tile and read the cell holding (`cellLat`, `cellLon`):
+/// pass the climate lookup's `cell_lat` and `cell_lon`. Returns the
+/// [`crate::water_balance::WaterBalanceLookup`] as a plain object, or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a water_balance tile, the coordinate is invalid
+/// or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupWaterBalance)]
+pub fn lookup_water_balance_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::water_balance::WaterBalanceTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::water_balance::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Compute annual FAO-56 geometric photoperiod summary for `lat` (`-90..=90`),
+/// returning `{ min_hours, max_hours, amplitude_hours, monthly_hours,
+/// polar_night_days, midnight_sun_days }` or `null` if invalid.
+///
+/// # Errors
+/// Throws only on serialization failure.
+#[wasm_bindgen(js_name = photoperiod)]
+pub fn photoperiod_js(lat: f64) -> Result<JsValue, JsError> {
+    match crate::derived::photoperiod(lat) {
+        Some(p) => to_js(&p),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Compute Saxton & Rawls (2006) soil Available Water Capacity from fine-earth
+/// texture (`sandPct`, `clayPct`, optional `omPct` defaulting to `2.5%`),
+/// returning `{ field_capacity, wilting_point, awc_mm_per_m, awc_30cm_mm,
+/// awc_100cm_mm }` or `null` if out of domain.
+///
+/// # Errors
+/// Throws only on serialization failure.
+#[wasm_bindgen(js_name = soilAwc)]
+pub fn soil_awc_js(sand_pct: f64, clay_pct: f64, om_pct: Option<f64>) -> Result<JsValue, JsError> {
+    match crate::soil::soil_awc(sand_pct, clay_pct, om_pct) {
+        Some(a) => to_js(&a),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 /// Crate version, for logs and cache keys.
 #[wasm_bindgen(js_name = version)]
 #[must_use]

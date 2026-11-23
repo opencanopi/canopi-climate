@@ -49,6 +49,88 @@ pub const SOIL_FILL_RADIUS: usize = 8;
 /// Depth interval of the stored values.
 pub const SOIL_DEPTH: &str = "0-30 cm";
 
+/// Default soil organic matter (% by weight) assumed by [`soil_awc`] when
+/// site-specific SOC (`soil_plus` in v0.7.0) is not provided.
+pub const DEFAULT_OM_PCT: f64 = 2.5;
+
+/// Soil Available Water Capacity (AWC) derived from fine-earth texture via
+/// Saxton & Rawls (2006, SSSAJ 70:1569–1578, Table 1), 0 bytes stored in the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SoilAwc {
+    /// Volumetric water content at field capacity (`-33 kPa`, m³/m³).
+    pub field_capacity: f64,
+    /// Volumetric water content at permanent wilting point (`-1500 kPa`, m³/m³).
+    pub wilting_point: f64,
+    /// Available water capacity per meter of soil depth (mm/m).
+    pub awc_mm_per_m: f64,
+    /// Available water capacity in the 0–30 cm topsoil layer (mm).
+    pub awc_30cm_mm: f64,
+    /// Extrapolated available water capacity in a 0–100 cm tree root zone (mm).
+    pub awc_100cm_mm: f64,
+}
+
+impl SoilAwc {
+    /// Estimated days of soil moisture buffer for a given evapotranspiration
+    /// rate `et_mm_per_day` (mm/day) and effective rooting depth `root_depth_m` (m).
+    /// Returns `None` if either argument is non-finite or `<= 0`.
+    #[must_use]
+    pub fn drought_buffer_days(&self, et_mm_per_day: f64, root_depth_m: f64) -> Option<f64> {
+        if !et_mm_per_day.is_finite()
+            || !root_depth_m.is_finite()
+            || et_mm_per_day <= 0.0
+            || root_depth_m <= 0.0
+        {
+            return None;
+        }
+        let days = (self.awc_mm_per_m * root_depth_m) / et_mm_per_day;
+        Some((days * 10.0).round() / 10.0)
+    }
+}
+
+/// Saxton & Rawls (2006) pedotransfer function for Available Water Capacity
+/// from `sand_pct`, `clay_pct` (0–100, `sand + clay <= 100`), and optional
+/// organic matter `om_pct` (defaults to [`DEFAULT_OM_PCT`] = `2.5%`).
+///
+/// Calibration clamps prevent negative wilting points on pure sand and
+/// quadratic blow-up on heavy Vertisol clays (`clay <= 60%`, `OM <= 8%`,
+/// `θ_1500 ∈ [0.01, 0.50]`, `θ_33 ∈ [θ_1500 + 0.03, 0.60]`, `AWC_v ∈ [0.03, 0.30]`).
+/// Returns `None` for non-finite inputs, negative fractions, or `sand + clay > 100`.
+#[must_use]
+pub fn soil_awc(sand_pct: f64, clay_pct: f64, om_pct: Option<f64>) -> Option<SoilAwc> {
+    let ok = |x: f64| x.is_finite() && (0.0..=100.0).contains(&x);
+    if !ok(sand_pct) || !ok(clay_pct) || sand_pct + clay_pct > 100.0 + 1e-9 {
+        return None;
+    }
+    let om_raw = om_pct.unwrap_or(DEFAULT_OM_PCT);
+    if !om_raw.is_finite() || om_raw < 0.0 {
+        return None;
+    }
+    let s = sand_pct / 100.0;
+    let c = (clay_pct / 100.0).min(0.60);
+    let om = om_raw.clamp(0.0, 8.0);
+
+    let t1500t = -0.024 * s + 0.487 * c + 0.006 * om + 0.005 * s * om - 0.013 * c * om
+        + 0.068 * s * c
+        + 0.031;
+    let t1500 = (t1500t + (0.14 * t1500t - 0.02)).clamp(0.01, 0.50);
+
+    let t33t = -0.251 * s + 0.195 * c + 0.011 * om + 0.006 * s * om - 0.027 * c * om
+        + 0.452 * s * c
+        + 0.299;
+    let t33 = (t33t + (1.283 * t33t * t33t - 0.374 * t33t - 0.015)).clamp(t1500 + 0.03, 0.60);
+
+    let awc_v = (t33 - t1500).clamp(0.03, 0.30);
+    let round3 = |x: f64| (x * 1000.0).round() / 1000.0;
+    let round1 = |x: f64| (x * 10.0).round() / 10.0;
+    Some(SoilAwc {
+        field_capacity: round3(t33),
+        wilting_point: round3(t1500),
+        awc_mm_per_m: round1(awc_v * 1000.0),
+        awc_30cm_mm: round1(awc_v * 300.0),
+        awc_100cm_mm: round1(awc_v * 1000.0),
+    })
+}
+
 /// USDA soil texture classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -328,5 +410,34 @@ mod tests {
     #[test]
     fn decode_rejects_wrong_band_counts() {
         assert!(decode(b"nope").is_err());
+    }
+
+    #[test]
+    fn saxton_rawls_awc_handles_sand_loam_vertisol_and_bounds() {
+        // Pure sand with 0% OM must stay non-negative (wilting_point clamped >= 0.01)
+        let sand = soil_awc(100.0, 0.0, Some(0.0)).unwrap();
+        assert!(sand.wilting_point >= 0.01);
+        assert!(sand.field_capacity > sand.wilting_point);
+        assert!(sand.awc_30cm_mm >= 9.0 && sand.awc_30cm_mm <= 40.0);
+
+        // Loam (40% sand, 20% clay, default 2.5% OM) ~ 40-55 mm / 30 cm
+        let loam = soil_awc(40.0, 20.0, None).unwrap();
+        assert!(loam.awc_30cm_mm >= 35.0 && loam.awc_30cm_mm <= 60.0);
+        assert!((loam.awc_100cm_mm - loam.awc_mm_per_m).abs() < 1e-9);
+        let buf = loam.drought_buffer_days(5.0, 0.6).unwrap();
+        assert!(buf > 10.0 && buf < 30.0);
+        assert_eq!(loam.drought_buffer_days(0.0, 0.6), None);
+
+        // Heavy Vertisol clay (10% sand, 75% clay) must clamp cleanly without quadratic blow-up
+        let vert = soil_awc(10.0, 75.0, Some(12.0)).unwrap();
+        assert!(vert.field_capacity <= 0.60);
+        assert!(vert.wilting_point <= 0.50);
+        assert!(vert.awc_mm_per_m >= 30.0 && vert.awc_mm_per_m <= 300.0);
+
+        // Invalid domain
+        assert_eq!(soil_awc(60.0, 50.0, None), None);
+        assert_eq!(soil_awc(-1.0, 20.0, None), None);
+        assert_eq!(soil_awc(40.0, 20.0, Some(-1.0)), None);
+        assert_eq!(soil_awc(f64::NAN, 20.0, None), None);
     }
 }

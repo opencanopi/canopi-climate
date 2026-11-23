@@ -35,12 +35,14 @@ pub mod manifest;
 pub mod model;
 pub mod monthly;
 pub mod monthly_precip;
+pub mod phenology;
 pub mod raster;
 pub mod regions;
 pub mod soil;
 pub mod tile;
 #[cfg(any(test, feature = "pipeline"))]
 pub mod vectors;
+pub mod water_balance;
 
 #[cfg(feature = "pipeline")]
 pub mod pipeline;

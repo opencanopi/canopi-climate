@@ -19,6 +19,7 @@ pub mod layers;
 pub mod monthly;
 pub mod monthly_precip;
 pub mod netcdf;
+pub mod phenology;
 pub mod raster;
 pub mod regions;
 pub mod sample;
@@ -26,6 +27,7 @@ pub mod soil;
 pub mod sources;
 pub mod tiff_rows;
 pub mod vectors;
+pub mod water_balance;
 
 use std::path::PathBuf;
 

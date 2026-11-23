@@ -15,13 +15,15 @@ use crate::lookup::{Lookup, lookup_across, search_tiles};
 use crate::manifest::{FORMAT, FORMAT_VERSION, Manifest};
 use crate::monthly::{MONTHLY_SLOT_INDICES, MonthlyLookup, MonthlyTile};
 use crate::monthly_precip::{MonthlyPrecipLookup, MonthlyPrecipTile, PRECIP_LOOKUP_RADIUS};
+use crate::phenology::{PhenologyLookup, PhenologyTile};
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
 use crate::vectors::{
     ExtremesTailTiles, ExtremesTiles, FrostCalendarTiles, Getters, LayerTiles, MonthlyPrecipTiles,
-    MonthlyTiles, Site,
+    MonthlyTiles, PhenologyTiles, Site, WaterBalanceTiles,
 };
+use crate::water_balance::{WaterBalanceLookup, WaterBalanceTile};
 
 /// Decoded tiles kept in memory at most (about 1.4 MB each).
 const CACHE_TILES: usize = 96;
@@ -44,6 +46,8 @@ pub struct Grid {
     frost_calendar_cache: HashMap<TileId, FrostCalendarTile>,
     monthly_cache: HashMap<TileId, MonthlyTile>,
     monthly_precip_cache: HashMap<TileId, MonthlyPrecipTile>,
+    phenology_cache: HashMap<TileId, PhenologyTile>,
+    water_balance_cache: HashMap<TileId, WaterBalanceTile>,
 }
 
 impl Grid {
@@ -90,6 +94,8 @@ impl Grid {
             frost_calendar_cache: HashMap::new(),
             monthly_cache: HashMap::new(),
             monthly_precip_cache: HashMap::new(),
+            phenology_cache: HashMap::new(),
+            water_balance_cache: HashMap::new(),
         })
     }
 
@@ -185,7 +191,15 @@ impl Grid {
         if monthly_precip {
             self.load_monthly_precip(lat, lon, PRECIP_LOOKUP_RADIUS)?;
         }
-        let (cache, layers, ext, ext_tail, frost, mon, mon_p) = (
+        let phenology = self.has_layer(crate::phenology::DIR);
+        if phenology {
+            self.load_phenology(lat, lon, radius)?;
+        }
+        let water_balance = self.has_layer(crate::water_balance::DIR);
+        if water_balance {
+            self.load_water_balance(lat, lon, radius)?;
+        }
+        let (cache, layers, ext, ext_tail, frost, mon, mon_p, pheno, wb) = (
             &self.cache,
             &self.layer_cache,
             &self.extremes_cache,
@@ -193,6 +207,8 @@ impl Grid {
             &self.frost_calendar_cache,
             &self.monthly_cache,
             &self.monthly_precip_cache,
+            &self.phenology_cache,
+            &self.water_balance_cache,
         );
         let climate_tiles = |id: TileId| cache.get(&id);
         let soil_tiles = |id: TileId| layers.get(&("soil".to_string(), id));
@@ -202,6 +218,8 @@ impl Grid {
         let frost_calendar_tiles = |id: TileId| frost.get(&id);
         let monthly_tiles = |id: TileId| mon.get(&id);
         let monthly_precip_tiles = |id: TileId| mon_p.get(&id);
+        let phenology_tiles = |id: TileId| pheno.get(&id);
+        let water_balance_tiles = |id: TileId| wb.get(&id);
         let g = Getters {
             climate: &climate_tiles,
             soil: soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
@@ -214,6 +232,9 @@ impl Grid {
             monthly: monthly.then_some(&monthly_tiles as MonthlyTiles<'_, '_>),
             monthly_precip: monthly_precip
                 .then_some(&monthly_precip_tiles as MonthlyPrecipTiles<'_, '_>),
+            phenology: phenology.then_some(&phenology_tiles as PhenologyTiles<'_, '_>),
+            water_balance: water_balance
+                .then_some(&water_balance_tiles as WaterBalanceTiles<'_, '_>),
         };
         crate::vectors::site(g, (lat, lon, radius), own_tile_only)
             .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
@@ -541,6 +562,10 @@ impl Grid {
                 Kind::Monthly
             } else if l.id == crate::monthly_precip::DIR {
                 Kind::MonthlyPrecip
+            } else if l.id == crate::phenology::DIR {
+                Kind::Phenology
+            } else if l.id == crate::water_balance::DIR {
+                Kind::WaterBalance
             } else {
                 Kind::Layer(l.bands.len())
             };
@@ -649,6 +674,110 @@ impl Grid {
             None => Ok(None),
         }
     }
+
+    fn load_phenology(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.phenology_cache.len() + ids.len() > CACHE_TILES {
+            self.phenology_cache.clear();
+        }
+        for t in ids {
+            if self.phenology_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::phenology::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = PhenologyTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.phenology_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    fn load_water_balance(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.water_balance_cache.len() + ids.len() > CACHE_TILES {
+            self.water_balance_cache.clear();
+        }
+        for t in ids {
+            if self.water_balance_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::water_balance::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = WaterBalanceTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.water_balance_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    /// Phenology at a climate cell (`cell_lat`, `cell_lon`).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn phenology_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<PhenologyLookup>> {
+        if !self.has_layer(crate::phenology::DIR) {
+            return Ok(None);
+        }
+        self.load_phenology(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.phenology_cache.get(&id) {
+            Some(tile) => crate::phenology::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Water balance at a climate cell (`cell_lat`, `cell_lon`).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn water_balance_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<WaterBalanceLookup>> {
+        if !self.has_layer(crate::water_balance::DIR) {
+            return Ok(None);
+        }
+        self.load_water_balance(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.water_balance_cache.get(&id) {
+            Some(tile) => crate::water_balance::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
+    }
 }
 
 /// What a tile file holds.
@@ -662,6 +791,8 @@ enum Kind {
     FrostCalendar,
     Monthly,
     MonthlyPrecip,
+    Phenology,
+    WaterBalance,
 }
 
 /// Why a tile file does not decode as the tile `name` (`None`: it does).
@@ -674,6 +805,8 @@ fn decode_problem(bytes: &[u8], kind: Kind, name: &str) -> Option<String> {
         Kind::FrostCalendar => FrostCalendarTile::decode(bytes).map(|t| t.id()),
         Kind::Monthly => MonthlyTile::decode(bytes).map(|t| t.id()),
         Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes).map(|t| t.id()),
+        Kind::Phenology => PhenologyTile::decode(bytes).map(|t| t.id()),
+        Kind::WaterBalance => WaterBalanceTile::decode(bytes).map(|t| t.id()),
     };
     match id {
         Err(e) => Some(e.to_string()),

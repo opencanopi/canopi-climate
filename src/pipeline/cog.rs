@@ -306,6 +306,43 @@ mod tests {
         );
     }
 
+    /// The committed v0.6.0 fixtures (`phenology`, `water_balance`) are what
+    /// the writer produces today (`CANOPI_REGEN_FIXTURES=1` rewrites them).
+    #[test]
+    fn committed_v06_fixtures_are_reproducible() {
+        let ph_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-phenology-n50e000.tif"
+        );
+        let ph_tile = crate::phenology::synthetic::phenology();
+        let ph_bytes =
+            write_raster_checked(ph_tile.as_raster(), &temp("phenology-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(ph_fixture, &ph_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(ph_fixture).unwrap(),
+            ph_bytes,
+            "phenology fixture drifted"
+        );
+
+        let wb_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-water-balance-n50e000.tif"
+        );
+        let wb_tile = crate::water_balance::synthetic::water_balance();
+        let wb_bytes =
+            write_raster_checked(wb_tile.as_raster(), &temp("water-balance-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(wb_fixture, &wb_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(wb_fixture).unwrap(),
+            wb_bytes,
+            "water_balance fixture drifted"
+        );
+    }
+
     /// The committed fixture is what the writer produces today. Set
     /// `CANOPI_REGEN_FIXTURES=1` to rewrite it after a deliberate change.
     #[test]

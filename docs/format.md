@@ -425,11 +425,11 @@ the climate answer's `(cell_lat, cell_lon)` in its `tile`.
 
 ### Phenology (`phenology/`): 5 bands
 
-1991–2020 mean annual Fishman (1987) Dynamic Model Chill Portions over a 211-day winter window
-(±105 days centered on each cell's thermal-winter `winter_doy`, via 12 two-hourly closed-form ODE
-steps per day from ERA5-Land daily `Tmin`/`Tmax`), evaluated simultaneously at five uniform daily
-warming shifts `ΔT ∈ {0, +1, +2, +3, +4 °C}` so readers can interpolate future SSP2-4.5 and
-microclimate chill collapse from winter warming deltas.
+1991–2020 mean annual Fishman (1987) Dynamic Model Chill Portions over a 7-month (~212-day) winter
+window (Oct–Apr for thermal-NH pixels where `winter_m` is Oct–Mar, Apr–Oct for thermal-SH pixels
+where `winter_m` is Apr–Sep, via 12 two-hourly closed-form ODE steps per day from ERA5-Land daily
+`Tmin`/`Tmax`), evaluated simultaneously at five uniform daily warming shifts `ΔT ∈ {0, +1, +2, +3, +4 °C}`
+so readers can interpolate future SSP2-4.5 and microclimate chill collapse from winter warming deltas.
 
 | # | Band id | Unit | Scale | Content |
 |---|---|---|---|---|

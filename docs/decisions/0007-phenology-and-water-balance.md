@@ -103,8 +103,8 @@
     TerraClimate `def` (1991–2020).
   - `2`: `cdd_max_days` (days, scale `1`) — mean annual maximum consecutive dry days
     (`total_precipitation_sum < 0.001 m`, i.e. `< 1 mm/day`) from **ERA5-Land Daily**
-    (`ECMWF/ERA5_LAND/DAILY_AGGR`, 0.1°, 1991–2020). Each pixel's CDD year is anchored at its
-    **wettest month's** mid-month DOY (1991–2020) so Southern Hemisphere and tropical dry seasons
+    (`ECMWF/ERA5_LAND/DAILY_AGGR`, 0.1°, 1991–2020). Each pixel's CDD year is anchored at the
+    **first day of its wettest month** (1991–2020) so Southern Hemisphere and tropical dry seasons
     crossing Dec 31 → Jan 1 are never split across calendar years. Exported in 3 × 10-year chunks
     (`1991–2000`, `2001–2010`, `2011–2020`) and averaged locally.
   - `3`: `vpd_summer_kpa` (kPa, scale `0.01`, stored as hundredths of kPa) — **peak-quarter monthly-mean
