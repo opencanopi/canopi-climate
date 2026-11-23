@@ -417,6 +417,45 @@ under the optional top-level `analogues` manifest object and in `SHA256SUMS`.
   Haversine great-circle distance (`min_distance_km`, default `100 km`) and report `delta_lat_deg =
   ||query_lat| − |cand_lat||`.
 
+## Phenology and water balance (`phenology/` and `water_balance/`)
+
+Both layers sit on the 0.1° climate grid (100 × 100 cells per 10° tile, internal tile 112), are
+static (no `slots` array), and have no spatial search of their own: a reader reads the cell holding
+the climate answer's `(cell_lat, cell_lon)` in its `tile`.
+
+### Phenology (`phenology/`): 5 bands
+
+1991–2020 mean annual Fishman (1987) Dynamic Model Chill Portions over a 211-day winter window
+(±105 days centered on each cell's thermal-winter `winter_doy`, via 12 two-hourly closed-form ODE
+steps per day from ERA5-Land daily `Tmin`/`Tmax`), evaluated simultaneously at five uniform daily
+warming shifts `ΔT ∈ {0, +1, +2, +3, +4 °C}` so readers can interpolate future SSP2-4.5 and
+microclimate chill collapse from winter warming deltas.
+
+| # | Band id | Unit | Scale | Content |
+|---|---|---|---|---|
+| 0 | `chill_portions_0c` | CP | 1 | baseline 1991–2020 mean annual Chill Portions (`ΔT = 0 °C`) |
+| 1 | `chill_portions_1c` | CP | 1 | mean annual Chill Portions under `+1 °C` warming |
+| 2 | `chill_portions_2c` | CP | 1 | mean annual Chill Portions under `+2 °C` warming |
+| 3 | `chill_portions_3c` | CP | 1 | mean annual Chill Portions under `+3 °C` warming |
+| 4 | `chill_portions_4c` | CP | 1 | mean annual Chill Portions under `+4 °C` warming |
+
+Every offset is 0. A cell has all 5 values or none (`0` is a valid zero-chill value in frost-free
+tropics, distinct from `NODATA = -32768`).
+
+### Water balance (`water_balance/`): 4 bands
+
+1991–2020 drought and atmospheric evaporative-demand climatology combining TerraClimate (4 km, CC0)
+with ERA5-Land daily precipitation (0.1°).
+
+| # | Band id | Unit | Scale | Content |
+|---|---|---|---|---|
+| 0 | `cwd_mm` | mm/year | 1 | mean annual Climatic Water Deficit (TerraClimate `def`, 1991–2020) |
+| 1 | `cwd_p90_mm` | mm/year | 1 | 90th-percentile (1-in-10 drought year) annual CWD (TerraClimate `def`, 1991–2020) |
+| 2 | `cdd_max_days` | days | 1 | mean annual max consecutive dry days (`P < 1 mm/day`, ERA5-Land daily 1991–2020, anchored at each cell's wettest month) |
+| 3 | `vpd_summer_kpa` | kPa | 0.01 | peak-quarter (max circular 3-month rolling mean) climatological monthly-mean VPD (TerraClimate `vpd`, 1991–2020) |
+
+Every offset is 0. A cell has all 4 values or none.
+
 ## Compatibility rule
 
 | Change | Allowed in | Requirement |
