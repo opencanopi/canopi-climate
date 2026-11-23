@@ -417,6 +417,132 @@ const SOILGRIDS_FILES: &[PinnedFile] = &[
     ),
 ];
 
+/// SoilGrids 2.0 5-km aggregates (Homolosine, `int16`) for `soil_plus/`:
+/// 0-30 cm (`soc`, `bdod`, `cfvo`) and 30-100 cm (`cfvo`, `phh2o`, `clay`),
+/// verified against ISRIC's `checksum.sha256.txt` on 2026-11-23.
+const SOILGRIDS_PLUS_FILES: &[PinnedFile] = &[
+    pin(
+        "soilgrids/soc_0-5cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/soc/soc_0-5cm_mean_5000.tif"
+        ),
+        "cd1f40e14817112cb732ff84374182d628b858b8843cd477fc410f4a32764bf3",
+    ),
+    pin(
+        "soilgrids/soc_5-15cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/soc/soc_5-15cm_mean_5000.tif"
+        ),
+        "1aed65adc0f9b35d5725576a98557454d895cd8a1863309a7229c789f45eb782",
+    ),
+    pin(
+        "soilgrids/soc_15-30cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/soc/soc_15-30cm_mean_5000.tif"
+        ),
+        "f18e7fb4f1d306497bf829ff5ede5e3113ee555e40f21e496d0a8d42f7c12985",
+    ),
+    pin(
+        "soilgrids/bdod_0-5cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/bdod/bdod_0-5cm_mean_5000.tif"
+        ),
+        "94860e1136cc6d6193895ed72460f54771f62099cf8148459d2d1cd38808767d",
+    ),
+    pin(
+        "soilgrids/bdod_5-15cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/bdod/bdod_5-15cm_mean_5000.tif"
+        ),
+        "39813f5e7c2c249eb28fe677976b6c1a6d3085b21128251856556f0fce29e0b9",
+    ),
+    pin(
+        "soilgrids/bdod_15-30cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/bdod/bdod_15-30cm_mean_5000.tif"
+        ),
+        "1b6dec06d3627cafdbadd516cb75009f94832f80192e778ad5f3b9ecdf6ce75e",
+    ),
+    pin(
+        "soilgrids/cfvo_0-5cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/cfvo/cfvo_0-5cm_mean_5000.tif"
+        ),
+        "65391a75072079495afd8a0006055120e821174a45934a5845014a414dbc92c0",
+    ),
+    pin(
+        "soilgrids/cfvo_5-15cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/cfvo/cfvo_5-15cm_mean_5000.tif"
+        ),
+        "b5207606e13b090567ee2300c1bb81367c6d22f5f3475e489fcd9f8304efe2c8",
+    ),
+    pin(
+        "soilgrids/cfvo_15-30cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/cfvo/cfvo_15-30cm_mean_5000.tif"
+        ),
+        "1351d03cf167042601f313dfce7033aa9544a893284aef1b94037b492beeb779",
+    ),
+    pin(
+        "soilgrids/cfvo_30-60cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/cfvo/cfvo_30-60cm_mean_5000.tif"
+        ),
+        "5bdfcca87b69ece011fd491c36580ed483697515ad1989c80e16f2f40d3f39d6",
+    ),
+    pin(
+        "soilgrids/cfvo_60-100cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/cfvo/cfvo_60-100cm_mean_5000.tif"
+        ),
+        "2cd3771c4292b588f33a2a279f88e582cff1fb2882c02b6a6fa28a9845940a80",
+    ),
+    pin(
+        "soilgrids/phh2o_30-60cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/phh2o/phh2o_30-60cm_mean_5000.tif"
+        ),
+        "076e5b94b91c35f6acb2f5dea64b070d67684ca26fbb403b2ab9502d77b0a6a9",
+    ),
+    pin(
+        "soilgrids/phh2o_60-100cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/phh2o/phh2o_60-100cm_mean_5000.tif"
+        ),
+        "ab5b2555fd7dceca4afd0b1bf3750387068bc92a15da406ed417a8f62ad96e97",
+    ),
+    pin(
+        "soilgrids/clay_30-60cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/clay/clay_30-60cm_mean_5000.tif"
+        ),
+        "b980153413d469a39163fbebd8011ca64c834850427fdb21560deaae6b6007da",
+    ),
+    pin(
+        "soilgrids/clay_60-100cm_mean_5000.tif",
+        concat!(
+            "https://files.isric.org/soilgrids/latest/data_aggregated/5000m",
+            "/clay/clay_60-100cm_mean_5000.tif"
+        ),
+        "211509f341e87746781a41d9110980ec1e261f1a55593d259d988b14fe00fb42",
+    ),
+];
+
 const NATURAL_EARTH_FILES: &[PinnedFile] = &[pin(
     "naturalearth/ne_50m_admin_0_map_units.geojson",
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_admin_0_map_units.geojson",
@@ -629,6 +755,39 @@ pub const SOURCES: &[Source] = &[
         required: true,
         layer: "water_balance",
     },
+    Source {
+        id: "soilgrids-2.0-plus",
+        title: "SoilGrids 2.0, 5 km aggregates: SOC, bulk density and coarse fragments (0-30 cm) plus subsoil coarse fragments, pH and clay (30-100 cm)",
+        citation: "Poggio, L., de Sousa, L. M., Batjes, N. H., Heuvelink, G. B. M., Kempen, B., Ribeiro, E., Rossiter, D. (2021). SoilGrids 2.0: producing soil information for the globe with quantified spatial uncertainty. SOIL 7, 217-240. https://doi.org/10.5194/soil-7-217-2021",
+        landing: "https://www.isric.org/explore/soilgrids",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Mean predictions, Interrupted Goode Homolosine (ESRI:54052), 5 km. Depth-weighted 0-30 cm (weights 5, 10, 15) and 30-100 cm (weights 30, 40) means on the 0.05-degree soil grid, reusing soil/'s 8-cell land-only fill mask.",
+        files: SOILGRIDS_PLUS_FILES,
+        required: true,
+        layer: "soil_plus",
+    },
+    Source {
+        id: "copernicus-dem-glo30",
+        title: "Copernicus DEM GLO-30 (COPERNICUS/DEM/GLO30_2024_1 on Google Earth Engine), 30 m global elevation",
+        citation: "European Space Agency (2024). Copernicus Global Digital Elevation Model (GLO-30). Distributed by OpenTopography / Google Earth Engine. https://doi.org/10.5270/ESA-c5d3d65. © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_DEM_GLO30",
+        licence: "Copernicus Data Policy (free, full and open access including commercial use with EU/ESA/DLR/Airbus attribution)",
+        notes: "Reduced on Earth Engine by scripts/ee/v07_terrain.py to canopi's 0.1-degree grid: cell mean elevation (elev_m, preserving DEM <= 0), p95 - p05 relief (relief_m), and median slope (slope_deg).",
+        files: &[],
+        required: true,
+        layer: "terrain",
+    },
+    Source {
+        id: "merit-hydro-v1.0.1",
+        title: "MERIT Hydro v1.0.1 (MERIT/Hydro/v1_0_1 on Google Earth Engine), Height Above Nearest Drainage (hnd)",
+        citation: "Yamazaki, D., Ikeshima, D., Sosa, J., Bates, P. D., Allen, G., Pavelsky, T. (2019). MERIT Hydro: A high-resolution global hydrography map based on latest topography datasets. Water Resources Research 55, 5053-5073. https://doi.org/10.1029/2019WR024873",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/MERIT_Hydro_v1_0_1",
+        licence: "ODbL 1.0 (https://opendatacommons.org/licenses/odbl/1-0/) — elected over CC BY-NC 4.0 for open AGPL-3.0 tile distribution",
+        notes: "Reduced on Earth Engine by scripts/ee/v07_terrain.py to canopi's 0.1-degree grid (median hnd clamped to [0, 3000] m). Coverage is 60S-90N; Antarctica and unmapped islands remain NODATA.",
+        files: &[],
+        required: true,
+        layer: "terrain",
+    },
 ];
 
 /// Base URL of CHELSA climatologies (for documentation).
@@ -724,9 +883,16 @@ mod tests {
                 .iter()
                 .all(|f| f.url.starts_with(SOILGRIDS_BASE))
         );
+        assert!(
+            SOILGRIDS_PLUS_FILES
+                .iter()
+                .all(|f| f.url.starts_with(SOILGRIDS_BASE))
+        );
         for layer in [
             "climate",
             "soil",
+            "soil_plus",
+            "terrain",
             "regions",
             "extremes",
             "monthly",
@@ -749,6 +915,7 @@ mod tests {
                 + CHELSA_FILES.len()
                 + CHELSA_TASMIN_FILES.len()
                 + SOILGRIDS_FILES.len()
+                + SOILGRIDS_PLUS_FILES.len()
                 + NATURAL_EARTH_FILES.len()
                 + WGSRPD_FILES.len()
                 + ERA5_LAND_FILES.len()

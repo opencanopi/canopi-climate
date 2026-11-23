@@ -1,13 +1,15 @@
 # Tile format contract (normative)
 
-- Status: accepted (2026-11-12; extremes layer 2026-11-18; monthly & monthly_precip layers 2026-11-22; extremes_tail, frost_calendar & analogues.bin 2026-11-23), crate 0.5.0, `format_version` 1.
+- Status: accepted (2026-11-12; extremes layer 2026-11-18; monthly & monthly_precip layers 2026-11-22; extremes_tail, frost_calendar & analogues.bin 2026-11-23; phenology & water_balance 2026-11-23; soil_plus, terrain & packs 2026-11-23), crate 0.7.0, `format_version` 1.
 - This document is the crate's architecture decision for the published grid: what a release
   contains and how a reader must interpret it. It is normative. The reasons behind the choices are
   in [0001](decisions/0001-tile-format.md) (container), [0002](decisions/0002-koppen-class-vs-monthly-means.md)
   (Köppen class), [0003](decisions/0003-site-layer-formats.md) (site layers),
   [0004](decisions/0004-monthly-and-relief-layers.md) (monthly layers and per-layer schema),
-  [0005](decisions/0005-annual-extremes.md) (annual extremes) and
-  [0006](decisions/0006-tail-extremes-frost-calendar-analogues.md) (tail extremes, frost calendar and 2050 Climate Twin analogues).
+  [0005](decisions/0005-annual-extremes.md) (annual extremes),
+  [0006](decisions/0006-tail-extremes-frost-calendar-analogues.md) (tail extremes, frost calendar and 2050 Climate Twin analogues),
+  [0007](decisions/0007-phenology-and-water-balance.md) (Dynamic Chill Portions, photoperiod, water balance and Saxton–Rawls AWC), and
+  [0008](decisions/0008-soil-plus-terrain-microclimate-packs.md) (deep soil, terrain, microclimate/trajectory engine and decoupled layer packs).
 - Machine-readable companions: `tests/fixtures/synthetic-expected.json` and `vectors/lookup.json`
   ([Vectors](#vectors)). Where this text and the vectors disagree, the vectors describe what the
   code does, and the disagreement is a bug in one of them.
@@ -29,6 +31,10 @@ A grid release is one tar (`canopi-climate-grid-vX.Y.Z.tar`) holding:
 | `extremes_tail/<name>.tif` | Static 1-in-10-year tail offsets, heat-stress days and recent warming trend (0.1° climate grid, since 0.5.0). |
 | `frost_calendar/<name>.tif` | Static hemisphere-aware frost dates, frost-free days, frost-year % and false-spring % (0.1° climate grid, since 0.5.0). |
 | `analogues.bin` | Compact binary k-NN index of historical 1991–2020 land cells for 2050 Climate Twin lookup (since 0.5.0). |
+| `phenology/<name>.tif` | Static 5-band Fishman Dynamic Chill Portions at ΔT ∈ {0..+4 °C} (0.1° climate grid, since 0.6.0). |
+| `water_balance/<name>.tif` | Static TerraClimate CWD/P90/VPD and ERA5-Land CDD (0.1° climate grid, since 0.6.0). |
+| `soil_plus/<name>.tif` | Static 6-band SoilGrids 2.0 organic carbon, bulk density, coarse fragments and 30–100 cm subsoil pH/clay (0.05° grid, since 0.7.0). |
+| `terrain/<name>.tif` | Static 4-band elevation, relief, slope and MERIT-Hydro HAND (0.1° climate grid, since 0.7.0). |
 | `ATTRIBUTION.md` | Sources, licences, citations. |
 | `build-report.json` | The build's checks and counts (land cells, class/means contradictions, clamped extremes, source comparisons; `layers`: soil fill by distance, region codes). Informative: a reader does not need it. |
 | `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md`, `analogues.bin` (when present) and every tile. |
@@ -95,7 +101,7 @@ first), and it refuses SHORT or LONG georeferencing (the site also reads them as
 Every grid and layer shares the same 10° × 10° tiles (36 × 18 tiles globally, EPSG:4326), with
 `tile_cells × cell_deg = 10` exactly:
 
-| | Climate, `extremes`, `monthly`, `extremes_tail`, `frost_calendar` | `soil`, `regions` | `monthly_precip` |
+| | Climate, `extremes`, `monthly`, `extremes_tail`, `frost_calendar`, `phenology`, `water_balance`, `terrain` | `soil`, `soil_plus`, `regions` | `monthly_precip` |
 |---|---|---|---|
 | CRS | EPSG:4326 (latitude/longitude, degrees) | same | same |
 | Cell (`cell_deg`) | 0.1° | 0.05° | 0.25° |
@@ -455,6 +461,61 @@ with ERA5-Land daily precipitation (0.1°).
 | 3 | `vpd_summer_kpa` | kPa | 0.01 | peak-quarter (max circular 3-month rolling mean) climatological monthly-mean VPD (TerraClimate `vpd`, 1991–2020) |
 
 Every offset is 0. A cell has all 4 values or none.
+
+## Deep soil and terrain (`soil_plus/` and `terrain/`)
+
+### Deep soil (`soil_plus/`): 6 bands
+
+On the 0.05° soil grid (200 × 200 cells per 10° tile, internal tile 208), static (no `slots` array).
+Computed from SoilGrids 2.0 5-km aggregates (CC BY 4.0) using depth-weighted means (0–30 cm: weights
+5, 10, 15; 30–100 cm: weights 30, 40) and reusing `soil/`'s exact 8-cell land-only fill mask without
+duplicating `fill_distance`.
+
+| # | Band id | Unit | Scale | Content |
+|---|---|---|---|---|
+| 0 | `soc_0_30` | g/kg | 0.5 | 0–30 cm soil organic carbon (feeds Saxton–Rawls AWC via `OM% = 0.1724 × soc`) |
+| 1 | `bdod_0_30` | g/cm³ | 0.01 | 0–30 cm bulk density of the fine earth fraction |
+| 2 | `cfvo_0_30` | % | 1 | 0–30 cm coarse fragments (> 2 mm, vol %; discounts topsoil AWC) |
+| 3 | `cfvo_30_100` | % | 1 | 30–100 cm coarse fragments (> 2 mm, vol %; skeletal subsoil proxy) |
+| 4 | `ph_30_100` | pH | 0.1 | 30–100 cm soil pH in water (calcareous subsoil / chlorosis proxy) |
+| 5 | `clay_30_100` | % | 1 | 30–100 cm clay content of the fine earth (subsoil drainage / claypan proxy) |
+
+Every offset is 0. A cell has all 6 values or none. Lookup uses the same 0.05° radius-2 nearest search as
+`soil/` (or reads the `soil/` answer's cell directly).
+
+### Terrain (`terrain/`): 4 bands
+
+On the 0.1° climate grid (100 × 100 cells per 10° tile, internal tile 112), static (no `slots` array),
+read at the climate answer's `(cell_lat, cell_lon)` in its `tile` (no spatial search of its own).
+
+| # | Band id | Unit | Scale | Content |
+|---|---|---|---|---|
+| 0 | `elev_m` | m | 1 | cell mean elevation from Copernicus DEM GLO-30 (signed `int16`, preserves below-sea-level land) |
+| 1 | `relief_m` | m | 1 | within-cell elevation relief (`p95 − p05` of GLO-30 DEM, `>= 0`) |
+| 2 | `slope_deg` | ° | 0.1 | within-cell median terrain slope from GLO-30 (`0..=90`) |
+| 3 | `hand_m` | m | 0.1 | within-cell median Height Above Nearest Drainage from MERIT-Hydro v1.0.1 (ODbL 1.0, 60°S–90°N, clamped to `0..=3000` m; MAY be `NODATA` outside MERIT-Hydro coverage) |
+
+Every offset is 0. A cell is valid whenever `elev_m`, `relief_m`, and `slope_deg` are set (`hand_m` is
+optional and decodes to `null` when `NODATA`).
+
+## Decoupled layer packs (`packs-vX.Y.Z.json`)
+
+Releases from `v0.7.0` onward MAY ship modular uncompressed `.tar` packs alongside the monolithic
+`canopi-climate-grid-vX.Y.Z.tar`, indexed by a top-level release asset `packs-vX.Y.Z.json` (plus
+`.sha256`). Pack hashes MUST NOT be embedded inside `manifest.json` (which lives inside `pack-core`),
+so `manifest.json` and `format_version: 1` remain byte-for-byte identical whether installed from the
+monolithic tar or assembled from packs:
+
+| Pack id | Contents |
+|---|---|
+| `core` | `manifest.json`, `ATTRIBUTION.md`, `build-report.json`, `SHA256SUMS.pack`, `tiles/`, `soil/`, `regions/`, `extremes/` |
+| `monthly` | `SHA256SUMS.pack`, `monthly/`, `monthly_precip/` |
+| `v05` | `SHA256SUMS.pack`, `extremes_tail/`, `frost_calendar/`, `analogues.bin` |
+| `v06` | `SHA256SUMS.pack`, `phenology/`, `water_balance/` |
+| `v07` | `SHA256SUMS.pack`, `soil_plus/`, `terrain/` |
+
+Each entry in `packs-vX.Y.Z.json` records `id`, `file`, `bytes`, `sha256`, `layers`, and `assets`, plus
+top-level `version`, `manifest_sha256`, and `climate_tiles_sha256`.
 
 ## Compatibility rule
 
