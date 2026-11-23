@@ -599,6 +599,12 @@ const ERA5_LAND_CDD_FILES: &[PinnedFile] = &[pin(
     "63e0ac177fc9d5237b8898c159ac44c522528ace4890f8fafa987de817ebb186",
 )];
 
+const TERRAIN_FILES: &[PinnedFile] = &[pin(
+    "ee/terrain_glo30_merit.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.7.0/terrain_glo30_merit.tif",
+    "ebdf6acb0e34ecf1e07a4c3ceb74a350f530a511790a3976ef4112e58a5a280b",
+)];
+
 /// Every source, grid inputs first.
 pub const SOURCES: &[Source] = &[
     Source {
@@ -772,8 +778,8 @@ pub const SOURCES: &[Source] = &[
         citation: "European Space Agency (2024). Copernicus Global Digital Elevation Model (GLO-30). Distributed by OpenTopography / Google Earth Engine. https://doi.org/10.5270/ESA-c5d3d65. © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.",
         landing: "https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_DEM_GLO30",
         licence: "Copernicus Data Policy (free, full and open access including commercial use with EU/ESA/DLR/Airbus attribution)",
-        notes: "Reduced on Earth Engine by scripts/ee/v07_terrain.py to canopi's 0.1-degree grid: cell mean elevation (elev_m, preserving DEM <= 0), p95 - p05 relief (relief_m), and median slope (slope_deg).",
-        files: &[],
+        notes: "Reduced on Earth Engine by scripts/ee/v07_terrain.py to canopi's 0.1-degree grid: cell mean elevation (elev_m, preserving DEM <= 0), p95 - p05 relief (relief_m), and median slope (slope_deg); combined with MERIT-Hydro HAND in ee/terrain_glo30_merit.tif.",
+        files: TERRAIN_FILES,
         required: true,
         layer: "terrain",
     },
@@ -925,6 +931,7 @@ mod tests {
                 + ERA5_LAND_PHENO_FILES.len()
                 + TERRACLIMATE_WB_FILES.len()
                 + ERA5_LAND_CDD_FILES.len()
+                + TERRAIN_FILES.len()
         );
         assert!(problems[0].starts_with("missing beck2023/"));
         assert!(pinned(&dir, "chelsa/CHELSA_bio6_1981-2010_V.2.1.tif").is_ok());

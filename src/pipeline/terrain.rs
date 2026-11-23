@@ -7,12 +7,15 @@
 //! fallback for `hand_m`; never fills across sea or defaults to 0).
 //! Method: `docs/decisions/0008-soil-plus-terrain-microclimate-packs.md`.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use serde_json::json;
-use wbgeotiff::GeoTiff;
+use tiff::decoder::{Decoder, DecodingResult, Limits};
+use tiff::tags::Tag;
 
 use super::build::{BuildConfig, diff_stats};
 use super::{PipelineError, Result, cog, layers};
@@ -60,37 +63,87 @@ impl GlobalBand {
 }
 
 fn read_inputs(path: &Path) -> Result<[GlobalBand; TERRAIN_BANDS]> {
-    let t = GeoTiff::open(path)?;
-    if (t.width() as usize, t.height() as usize) != (GRID_W, GRID_H) {
+    let f = File::open(path).map_err(|e| PipelineError::io(path, e))?;
+    let mut dec = Decoder::new(BufReader::new(f))
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+        .with_limits(Limits::unlimited());
+    let (w, h) = dec
+        .dimensions()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?;
+    if (w as usize, h as usize) != (GRID_W, GRID_H) {
         return Err(PipelineError::Data(format!(
-            "{}: {}x{}, expected {GRID_W}x{GRID_H}",
-            path.display(),
-            t.width(),
-            t.height()
+            "{}: {w}x{h}, expected {GRID_W}x{GRID_H}",
+            path.display()
         )));
     }
-    if t.band_count() != TERRAIN_BANDS {
+    let spp =
+        dec.get_tag_u32(Tag::SamplesPerPixel)
+            .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))? as usize;
+    if spp != TERRAIN_BANDS {
         return Err(PipelineError::Data(format!(
-            "{}: {} bands, expected {TERRAIN_BANDS}",
-            path.display(),
-            t.band_count()
+            "{}: {spp} bands, expected {TERRAIN_BANDS}",
+            path.display()
         )));
     }
+    let planar = dec.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1);
+    let n_px = GRID_W * GRID_H;
+    let raw: Vec<f32> = match dec
+        .read_image()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+    {
+        DecodingResult::I16(v) => v.into_iter().map(f32::from).collect(),
+        DecodingResult::F32(v) => v,
+        other => {
+            return Err(PipelineError::Data(format!(
+                "{}: unsupported sample type {:?}",
+                path.display(),
+                std::mem::discriminant(&other)
+            )));
+        }
+    };
+    if raw.len() != n_px * TERRAIN_BANDS {
+        return Err(PipelineError::Data(format!(
+            "{}: decoded {} samples, expected {}",
+            path.display(),
+            raw.len(),
+            n_px * TERRAIN_BANDS
+        )));
+    }
+    let mut bands = vec![vec![f32::from(NODATA); n_px]; TERRAIN_BANDS];
+    if planar == 2 {
+        for (b, dst) in bands.iter_mut().enumerate() {
+            dst.copy_from_slice(&raw[b * n_px..(b + 1) * n_px]);
+        }
+    } else {
+        for i in 0..n_px {
+            let base = i * TERRAIN_BANDS;
+            for (b, dst) in bands.iter_mut().enumerate() {
+                dst[i] = raw[base + b];
+            }
+        }
+    }
+    let [elev, relief, slope, hand]: [Vec<f32>; TERRAIN_BANDS] =
+        bands.try_into().map_err(|_| {
+            PipelineError::Data(format!(
+                "{}: expected {TERRAIN_BANDS} bands",
+                path.display()
+            ))
+        })?;
     Ok([
         GlobalBand {
-            data: t.read_band_f32(0)?,
+            data: elev,
             scale: 1.0,
         },
         GlobalBand {
-            data: t.read_band_f32(1)?,
+            data: relief,
             scale: 1.0,
         },
         GlobalBand {
-            data: t.read_band_f32(2)?,
+            data: slope,
             scale: 0.1,
         },
         GlobalBand {
-            data: t.read_band_f32(3)?,
+            data: hand,
             scale: 0.1,
         },
     ])
@@ -211,6 +264,10 @@ fn layer_spec(tiles: Vec<TileSpec>) -> LayerSpec {
 /// # Errors
 /// Missing climate tiles or `ee/terrain_glo30_merit.tif`, or I/O errors.
 pub fn run(cfg: &BuildConfig) -> Result<serde_json::Value> {
+    if !cfg.force && layers::has_layer(&cfg.out, DIR) {
+        eprintln!("{DIR}: already built (pass --force to rebuild)");
+        return Ok(json!({ "skipped": true }));
+    }
     let t0 = Instant::now();
     let src_path = cfg.sources.join(SOURCE_PATH);
     if !src_path.exists() {

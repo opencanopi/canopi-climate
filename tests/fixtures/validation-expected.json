@@ -4383,7 +4383,7 @@
       "slug": "riyadh"
     }
   ],
-  "grid_builder_version": "0.6.0",
+  "grid_builder_version": "0.7.0",
   "tolerance_precip_fraction": 0.4,
   "tolerance_temperature_c": 1.5,
   "what": "Grid lookups (radius 2) for the validation cities and the tolerance misses against ERA5 1991-2020 normals; regenerate with the validation example after a deliberate grid change"

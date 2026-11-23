@@ -55,6 +55,16 @@ Two static phenology & water-balance layers plus two 0-byte derived calculators 
 | `photoperiod` | 0 bytes | `dayLengthHours`, `photoperiodProfile` | Pole-hardened FAO-56 astronomical day-length and solstice range |
 | `awc` | 0 bytes | `soilAwcMmPerM` | Saxton–Rawls (2006) plant-available water capacity (mm/m) derived from `soil` sand/clay fractions |
 
+Two static site/topography layers, two 0-byte Rust/WASM site-intelligence engines, and decoupled modular layer packs (0.7.0):
+
+| Layer / Engine / Tool | Resolution | Fields / Exports | Meaning |
+|---|---|---|---|
+| `soil_plus` | 0.05° | `soc_0_30_g_kg`, `om_0_30_pct`, `bdod_0_30_g_cm3`, `cfvo_0_30_pct`, `cfvo_30_100_pct`, `ph_30_100`, `clay_30_100_pct` | SoilGrids 2.0 0–30 cm organic carbon/bulk density/rock fragments and 30–100 cm subsoil rock/pH/clay (`lookupSoilPlus`) |
+| `terrain` | 0.1° | `elev_m`, `relief_m`, `slope_deg`, `hand_m` | Copernicus DEM GLO-30 elevation/relief/slope + MERIT-Hydro v1.0.1 HAND (ODbL 1.0, 60°S–90°N) (`lookupTerrain`) |
+| `microclimate` | 0 bytes | `adjustMicroclimate` | Elevation lapse-rate, cold-air pooling, and slope/aspect solar-load adjustments |
+| `trajectory` | 0 bytes | `evaluateTrajectory` | Multi-decade species suitability & establishment-vs-maturity gap engine across today/2050/2085 |
+| `pack-grid` | CLI | `packs-vX.Y.Z.json` + 5 `.tar` packs | Decoupled modular layer packs (`core`, `monthly`, `v05`, `v06`, `v07`) alongside the monolithic grid tar |
+
 Two site layers, on a finer 0.05° grid (about 5.5 km) in the same 10° tiles,
 describe the place itself:
 
@@ -157,11 +167,12 @@ soil 45 KB, monthly_precip 14 KB and regions 1.4 KB.
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.6          # JSON: climate, soil, regions, extremes, monthly, monthly_precip, extremes_tail, frost_calendar, phenology, water_balance
-canopi-climate analogues 45.7640 4.8357 --grid out-v0.6       # JSON: 2041-2070 SSP2-4.5 historical Climate Twins
-canopi-climate sample points.csv --grid out-v0.6 -o climate.csv
-canopi-climate sample points.csv --grid out-v0.6 --regions --extremes --monthly
-canopi-climate verify-grid out-v0.6                           # sizes, SHA-256, every tile decoded
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.7          # JSON: climate, soil, regions, extremes, monthly, monthly_precip, extremes_tail, frost_calendar, phenology, water_balance
+canopi-climate analogues 45.7640 4.8357 --grid out-v0.7       # JSON: 2041-2070 SSP2-4.5 historical Climate Twins
+canopi-climate pack-grid out-v0.7 --out packs-v0.7.0          # Emit modular core/monthly/v05/v06/v07 .tar packs + packs-v0.7.0.json
+canopi-climate sample points.csv --grid out-v0.7 -o climate.csv
+canopi-climate sample points.csv --grid out-v0.7 --regions --extremes --monthly
+canopi-climate verify-grid out-v0.7                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 

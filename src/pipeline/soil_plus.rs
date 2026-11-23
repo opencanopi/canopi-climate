@@ -182,6 +182,10 @@ fn land_mask(out: &Path) -> Result<Vec<bool>> {
 /// # Errors
 /// Missing `regions` layer, missing SoilGrids sources, or I/O errors.
 pub fn run(cfg: &BuildConfig) -> Result<Value> {
+    if !cfg.force && layers::has_layer(&cfg.out, DIR) {
+        eprintln!("{DIR}: already built (pass --force to rebuild)");
+        return Ok(json!({ "skipped": true }));
+    }
     let t0 = Instant::now();
     let land = land_mask(&cfg.out)?;
 

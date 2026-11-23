@@ -286,6 +286,7 @@ fn eval_soil_ph(site: &TrajectorySiteInput, env: &SpeciesEnvelope) -> Option<Fac
 fn eval_drainage(site: &TrajectorySiteInput, env: &SpeciesEnvelope) -> Option<FactorMargin> {
     let mut worst_score = f64::INFINITY;
     let mut worst_margin = f64::INFINITY;
+    let mut worst_unit = "m";
     let mut evaluated = false;
 
     if let (Some(hand), Some(min_hand)) = (site.hand_m, env.min_hand_m)
@@ -295,6 +296,7 @@ fn eval_drainage(site: &TrajectorySiteInput, env: &SpeciesEnvelope) -> Option<Fa
         let m = hand - min_hand;
         worst_margin = m;
         worst_score = margin_score(m, 3.0);
+        worst_unit = "m";
         evaluated = true;
     }
     if env.tolerates_claypan == Some(false)
@@ -306,13 +308,14 @@ fn eval_drainage(site: &TrajectorySiteInput, env: &SpeciesEnvelope) -> Option<Fa
         if !evaluated || clay_score < worst_score {
             worst_score = clay_score;
             worst_margin = 40.0 - clay;
+            worst_unit = "%";
             evaluated = true;
         }
     }
     evaluated.then(|| FactorMargin {
         factor: FactorId::Drainage,
         margin: round2(worst_margin),
-        unit: "m",
+        unit: worst_unit,
         score: round2(worst_score),
     })
 }

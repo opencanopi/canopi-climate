@@ -1,6 +1,6 @@
 # Validation
 
-Grid v0.6 (`out-v0.6`) against ERA5 1991–2020 normals at 29 cities covering
+Grid v0.7 (`out-v0.7`) against ERA5 1991–2020 normals at 29 cities covering
 every Köppen main group (the 22 core cities plus 7 Plant Palette persona
 cities: Kiambu, Recife, Oulu, Mendoza, Kumasi, Osaka, Riyadh). Regenerate this
 table after a grid change; the commands are in `examples/validation.rs`.
@@ -294,6 +294,39 @@ Note the expected Mediterranean/Central Valley chill collapse at Seville
 (62 → 12 CP) and Davis (74 → 21 CP), Southern Hemisphere winter alignment at
 Canberra and Mendoza, and boreal warming chill gain at Oulu (76 → 119 CP as
 sub-freezing winter days warm into the 4–10 °C Fishman sweet spot).
+
+### Deep soil (`soil_plus`), terrain, microclimate/trajectory WASM, and modular packs (`v0.7.0`)
+
+Global `out-v0.7` build-report checks (0 `SHA256SUMS` diffs on all 10 prior
+`v0.6.0` layers + `analogues.bin`; `climate_tiles_sha256` unchanged at
+`f689af2d...`; `verify-grid`: 464 climate tiles, 4,510 layer tiles, 0 problems):
+
+- `soil_plus`: 324 tiles (24.73 MB), 5,514,051 measured cells + 485,584 filled
+  cells on the 0.05° grid (SoilGrids 2.0 0–30 cm SOC/BD/CFVO + 30–100 cm
+  CFVO/pH/clay, reusing `soil/`'s 8-cell land-only fill mask).
+- `terrain`: 438 tiles (10.35 MB), 2,171,421 cells (0 missing), 8,493
+  below-sea-level land cells preserved, 608,759 `hand_m = null` cells
+  (Antarctica south of 60°S and unmapped islands kept `NODATA` under ODbL 1.0).
+- `pack-grid`: emits 5 modular `.tar` packs (`core` 125.8 MB, `monthly` 54.4 MB,
+  `v05` 8.7 MB, `v06` 10.5 MB, `v07` 35.7 MB) + `packs-v0.7.0.json` + `.sha256`.
+
+Sanity check across 8 contrasting locations (via WASM `lookupTerrain` & `lookupSoilPlus`):
+
+| Location | Elev (m) | Relief (m) | Slope (°) | HAND (m) | SOC 0–30 (g/kg / OM%) | BD (g/cm³) | pH 30–100 | Clay 30–100 (%) |
+|---|---|---|---|---|---|---|---|---|
+| Paris | 57 | 54 | 1.1 | 7.2 | 28.5 (4.9%) | 1.30 | 5.8 | 30 |
+| Lyon | 189 | 96 | 0.7 | 3.5 | 24.0 (4.1%) | 1.41 | 6.3 | 31 |
+| Amsterdam | 1 | 9 | 0.4 | 0.7 | 104.5 (18.0%) | 1.07 | 7.2 | 33 |
+| Death Valley | −75 | 68 | 0.0 | 0.5 | 18.5 (3.2%) | 1.40 | 9.0 | 31 |
+| Quito | 2632 | 628 | 5.1 | 45.0 | 73.0 (12.6%) | 1.08 | 5.9 | 16 |
+| Chamonix | 1874 | 1504 | 25.3 | 219.9 | 95.5 (16.5%) | 1.07 | 5.6 | 29 |
+| Canberra | 611 | 140 | 1.4 | 8.9 | 14.0 (2.4%) | 1.28 | 6.6 | 42 |
+| Vostok | 3492 | 7 | 0.1 | `null` | `null` | `null` | `null` | `null` |
+
+Below-sea-level land is preserved (Death Valley −75 m), Dutch peatlands show
+low HAND (0.7 m) and high SOC (18.0% OM), Canberra's subsoil flags duplex
+claypan (42% clay), and Antarctica (Vostok) cleanly keeps `hand_m = null` and
+`soil_plus = null`.
 
 ## Site layers
 

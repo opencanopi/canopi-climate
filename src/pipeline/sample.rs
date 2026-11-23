@@ -566,6 +566,8 @@ impl Grid {
                 Kind::Phenology
             } else if l.id == crate::water_balance::DIR {
                 Kind::WaterBalance
+            } else if l.id == crate::terrain::DIR {
+                Kind::Terrain
             } else {
                 Kind::Layer(l.bands.len())
             };
@@ -793,6 +795,7 @@ enum Kind {
     MonthlyPrecip,
     Phenology,
     WaterBalance,
+    Terrain,
 }
 
 /// Why a tile file does not decode as the tile `name` (`None`: it does).
@@ -807,6 +810,7 @@ fn decode_problem(bytes: &[u8], kind: Kind, name: &str) -> Option<String> {
         Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes).map(|t| t.id()),
         Kind::Phenology => PhenologyTile::decode(bytes).map(|t| t.id()),
         Kind::WaterBalance => WaterBalanceTile::decode(bytes).map(|t| t.id()),
+        Kind::Terrain => crate::terrain::TerrainTile::decode(bytes).map(|t| t.id()),
     };
     match id {
         Err(e) => Some(e.to_string()),
