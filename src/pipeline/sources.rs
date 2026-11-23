@@ -443,6 +443,18 @@ const NEX_GDDP_FILES: &[PinnedFile] = &[pin(
     "8820706498ee7c6dbd188a28aeac39f22eb93a9f29a130f100a46ef0af1bed67",
 )];
 
+const ERA5_LAND_TAIL_FILES: &[PinnedFile] = &[pin(
+    "ee/era5land_extremes_tail.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.5.0/era5land_extremes_tail.tif",
+    "ce483863d82670d96c8a21121d5bb3c262ea0c686b376fe59a94ed352f3553ec",
+)];
+
+const ERA5_LAND_FROST_FILES: &[PinnedFile] = &[pin(
+    "ee/era5land_frost_calendar.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.5.0/era5land_frost_calendar.tif",
+    "3926d7862a34e8f716f4b8846de7f484dbf3b46614fc3cf12dee4c9636853e03",
+)];
+
 /// Every source, grid inputs first.
 pub const SOURCES: &[Source] = &[
     Source {
@@ -544,6 +556,28 @@ pub const SOURCES: &[Source] = &[
         required: true,
         layer: "monthly",
     },
+    Source {
+        id: "era5-land-extremes-tail",
+        title: "ERA5-Land daily aggregates (ECMWF/ERA5_LAND/DAILY_AGGR on Google Earth Engine), 1-in-10-year extreme tails, heat days >= 35 C, and 2015-2025 warming trend",
+        citation: "Muñoz-Sabater, J., et al. (2021). ERA5-Land: a state-of-the-art global reanalysis dataset for land applications. Earth System Science Data 13, 4349-4383. https://doi.org/10.5194/essd-13-4349-2021. Contains modified Copernicus Climate Change Service information.",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_DAILY_AGGR",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Reduced on Earth Engine by scripts/ee/v05_layers.py on ERA5-Land's 0.1-degree grid: P10(TNn)-mean(TNn), P90(TXx)-mean(TXx), mean annual days Tmax >= 35 C (1991-2020), and mean(Tmean 2015-2025) - mean(Tmean 1991-2020); float32.",
+        files: ERA5_LAND_TAIL_FILES,
+        required: true,
+        layer: "extremes_tail",
+    },
+    Source {
+        id: "era5-land-frost-calendar",
+        title: "ERA5-Land daily aggregates (ECMWF/ERA5_LAND/DAILY_AGGR on Google Earth Engine), hemisphere-aware frost calendar and false-spring risk, 1991-2020",
+        citation: "Muñoz-Sabater, J., et al. (2021). ERA5-Land: a state-of-the-art global reanalysis dataset for land applications. Earth System Science Data 13, 4349-4383. https://doi.org/10.5194/essd-13-4349-2021. Contains modified Copernicus Climate Change Service information.",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_DAILY_AGGR",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Computed by scripts/ee/v05_layers.py (frost-fetch + combine) on ERA5-Land's native 0.1-degree grid (1991-2020 frost years anchored to per-pixel thermal winter): last spring frost (median & P90), first autumn frost, frost-free days, frost-year %, and false-spring killing-freeze %; int16.",
+        files: ERA5_LAND_FROST_FILES,
+        required: true,
+        layer: "frost_calendar",
+    },
 ];
 
 /// Base URL of CHELSA climatologies (for documentation).
@@ -639,7 +673,15 @@ mod tests {
                 .iter()
                 .all(|f| f.url.starts_with(SOILGRIDS_BASE))
         );
-        for layer in ["climate", "soil", "regions", "extremes", "monthly"] {
+        for layer in [
+            "climate",
+            "soil",
+            "regions",
+            "extremes",
+            "monthly",
+            "extremes_tail",
+            "frost_calendar",
+        ] {
             assert!(!manifest_sources(layer).is_empty(), "{layer}");
         }
     }
@@ -658,6 +700,8 @@ mod tests {
                 + WGSRPD_FILES.len()
                 + ERA5_LAND_FILES.len()
                 + NEX_GDDP_FILES.len()
+                + ERA5_LAND_TAIL_FILES.len()
+                + ERA5_LAND_FROST_FILES.len()
         );
         assert!(problems[0].starts_with("missing beck2023/"));
         assert!(pinned(&dir, "chelsa/CHELSA_bio6_1981-2010_V.2.1.tif").is_ok());

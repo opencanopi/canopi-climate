@@ -38,6 +38,14 @@ Two monthly climatology layers (0.4.0), for three slots (`1991-2020`, `2041-2070
 | `monthly` | 0.1° | `gdd_base_10`, `chill_months` | °C·day, months | annual growing degree-days (base 10 °C) and chill-month count (`0 < tmean <= 7.2 °C`), derived at lookup |
 | `monthly_precip` | 0.25° | `precip_mm` | mm/month | 12 monthly precipitation totals (1 mm step, land-cell mean) |
 
+Two static agroecological risk layers and a compact Climate Twin index (0.5.0), built from ERA5-Land daily (1991–2020 / 2015–2025) and the historical climate grid:
+
+| Layer / Artifact | Resolution | Fields | Meaning |
+|---|---|---|---|
+| `extremes_tail` | 0.1° | `tmin_p10_gap_c`, `tmax_p90_gap_c`, `heat_days_35c`, `recent_trend_c` | 1-in-10-yr cold/heat tail offsets, mean annual days ≥ 35 °C, and 2015–2025 vs 1991–2020 warming trend |
+| `frost_calendar` | 0.1° | `last_spring_frost_doy`, `last_spring_frost_p90_doy`, `first_autumn_frost_doy`, `frost_free_days`, `frost_year_pct`, `false_spring_pct`, `regime` | Hemisphere-aware frost calendar anchored to thermal winter, plus false-spring killing-freeze risk (Tmin ≤ −2 °C after ≥ 150 GDD₅) |
+| `analogues.bin` | 1.0° (~22k cells, 553 KB) | `findAnalogues` / `canopi-climate analogues` | Phase-invariant 8D z-score k-NN index for finding historical Climate Twins of future (2050/2085) climates in Rust & WASM |
+
 Two site layers, on a finer 0.05° grid (about 5.5 km) in the same 10° tiles,
 describe the place itself:
 
@@ -140,10 +148,11 @@ soil 45 KB, monthly_precip 14 KB and regions 1.4 KB.
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.4          # JSON: climate, soil, regions, extremes, monthly, monthly_precip
-canopi-climate sample points.csv --grid out-v0.4 -o climate.csv
-canopi-climate sample points.csv --grid out-v0.4 --regions --extremes --monthly
-canopi-climate verify-grid out-v0.4                           # sizes, SHA-256, every tile decoded
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.5          # JSON: climate, soil, regions, extremes, monthly, monthly_precip, extremes_tail, frost_calendar
+canopi-climate analogues 45.7640 4.8357 --grid out-v0.5       # JSON: 2041-2070 SSP2-4.5 historical Climate Twins
+canopi-climate sample points.csv --grid out-v0.5 -o climate.csv
+canopi-climate sample points.csv --grid out-v0.5 --regions --extremes --monthly
+canopi-climate verify-grid out-v0.5                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 

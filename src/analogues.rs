@@ -733,7 +733,9 @@ where
     }
 
     let best_sigma = matches.first().map(|m| m.sigma);
-    let novel_climate = best_sigma.is_none_or(|s| s > f64::from(novel_threshold));
+    let novel_climate = matches
+        .first()
+        .is_none_or(|m| m.match_quality == MatchQuality::Novel);
     AnalogueResult {
         novel_climate,
         best_sigma,

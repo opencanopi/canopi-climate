@@ -1,6 +1,6 @@
 # Validation
 
-Grid v0.4 (`out-v0.4`) against ERA5 1991–2020 normals at 29 cities covering
+Grid v0.5 (`out-v0.5`) against ERA5 1991–2020 normals at 29 cities covering
 every Köppen main group (the 22 core cities plus 7 Plant Palette persona
 cities: Kiambu, Recife, Oulu, Mendoza, Kumasi, Osaka, Riyadh). Regenerate this
 table after a grid change; the commands are in `examples/validation.rs`.
@@ -234,6 +234,33 @@ Global build-report invariants across 2,171,421 climate cells (358,004
 - Driest-month agreement with 0.1° Beck precipitation: **99.93 %** (gate ≥ 95 %).
 - Against ERA5 across the 29 validation cities: **29 / 29** wettest-month and
   **29 / 29** driest-month agreement (within 15 mm for near-ties).
+
+### Tail extremes, frost calendar, and climate analogues (`v0.5.0`)
+
+Global `out-v0.5` build-report checks (0 `SHA256SUMS` diffs on all prior `v0.4.0`
+layers; `verify-grid`: 464 climate tiles, 2,920 layer tiles, 0 problems):
+
+- `extremes_tail`: 417 tiles (4.38 MB), 2,171,102 cells (4,347 coastal-filled, 319 missing).
+- `frost_calendar`: 417 tiles (3.00 MB), 2,171,102 cells (443,895 frost-free,
+  1,050,740 seasonal, 676,467 year-round). Verified bit-exact (6/6 bands) against
+  the GEE `GRID_E5L` expression on Paris, Davis (CA), Quito, and Singapore, and
+  within 1 day P90 tie-rounding on Canberra.
+- `analogues.bin`: 21,767 reference cells (552.8 KB, `sha256=038e4e6f...`),
+  phase-invariant 8D z-score k-NN index for 2050/2085 Climate Twin search.
+
+Sanity check across 8 contrasting cities (`extremes_tail`, `frost_calendar`, and
+top 2041–2070 SSP2-4.5 historical Climate Twin):
+
+| City | `tmin_p10` / `tmax_p90` (°C) | Heat ≥35 °C (d/yr) | Trend (°C) | Last spring (P90) / First autumn DOY | Frost-free (d) | False spring % | Top 2050 SSP2-4.5 twin (σ) |
+|---|---|---|---|---|---|---|---|
+| Lyon | −3.7 / +3.7 | 1.4 | +1.0 | 87 (98) / 320 | 234 | 0 | Po Valley, IT `Cfa` (0.064) |
+| Lormes | −4.3 / +2.9 | 0.8 | +0.9 | 97 (112) / 318 | 218 | 3 | Tarn, FR `Cfb` (0.054) |
+| Seville | −2.1 / +2.2 | 42.2 | +0.7 | 28 (55) / 9 | 365 (43% yrs) | 0 | Andalusia / N. Tunisia `Csa` (0.080) |
+| Oulu | −5.9 / +2.5 | 0.0 | +0.8 | 129 (139) / 287 | 153 | 0 | Vaasa, FI `Dfb` (0.057) |
+| Mendoza | −3.7 / +2.2 | 2.5 | +0.5 | 234 (257) / 169 | 297 | 10 | Chihuahua, MX `BWh` (0.087) |
+| Kiambu | −0.7 / +1.3 | 0.0 | +0.5 | frost-free | 365 (0% yrs) | 0 | E. Cape, ZA `Cfa` / S. Uganda `Aw` (0.073) |
+| Paris | −3.3 / +3.3 | 0.8 | +0.8 | 91 (110) / 325 | 233 | 7 | Loire Valley / Toulouse, FR `Cfb` (0.067) |
+| Canberra | −0.8 / +2.3 | 1.8 | +0.3 | 256 (275) / 135 | 247 | 0 | Mudgee, NSW AU `Cfa` (0.048) |
 
 ## Site layers
 

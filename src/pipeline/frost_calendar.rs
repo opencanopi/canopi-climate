@@ -6,12 +6,15 @@
 //! or Dec/Jan wraps) with nearest-within-5-cells coastal fallback.
 //! Method: `docs/decisions/0006-tail-extremes-frost-calendar-analogues.md`.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use serde_json::json;
-use wbgeotiff::GeoTiff;
+use tiff::decoder::{Decoder, DecodingResult, Limits};
+use tiff::tags::Tag;
 
 use super::build::{BuildConfig, diff_stats};
 use super::{PipelineError, Result, cog, layers};
@@ -83,26 +86,36 @@ impl E5lFrost {
 }
 
 fn read_input(path: &Path) -> Result<E5lFrost> {
-    let t = GeoTiff::open(path)?;
-    if (t.width() as usize, t.height() as usize) != (E5L_W, E5L_H) {
+    let f = File::open(path).map_err(|e| PipelineError::io(path, e))?;
+    let mut dec = Decoder::new(BufReader::new(f))
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+        .with_limits(Limits::unlimited());
+    let (w, h) = dec
+        .dimensions()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?;
+    if (w as usize, h as usize) != (E5L_W, E5L_H) {
         return Err(PipelineError::Data(format!(
-            "{}: {}x{}, expected {E5L_W}x{E5L_H}",
-            path.display(),
-            t.width(),
-            t.height()
+            "{}: {w}x{h}, expected {E5L_W}x{E5L_H}",
+            path.display()
         )));
     }
-    if t.band_count() != FROST_BANDS {
+    let spp =
+        dec.get_tag_u32(Tag::SamplesPerPixel)
+            .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))? as usize;
+    if spp != FROST_BANDS {
         return Err(PipelineError::Data(format!(
-            "{}: {} bands, expected {FROST_BANDS}",
-            path.display(),
-            t.band_count()
+            "{}: {spp} bands, expected {FROST_BANDS}",
+            path.display()
         )));
     }
-    let mut bands = Vec::with_capacity(FROST_BANDS);
-    for b in 0..FROST_BANDS {
-        let f = t.read_band_f32(b)?;
-        let v: Vec<i16> = f
+    let planar = dec.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1);
+    let n_px = E5L_W * E5L_H;
+    let raw: Vec<i16> = match dec
+        .read_image()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+    {
+        DecodingResult::I16(v) => v,
+        DecodingResult::F32(v) => v
             .into_iter()
             .map(|x| {
                 if x.is_finite() {
@@ -111,14 +124,37 @@ fn read_input(path: &Path) -> Result<E5lFrost> {
                     NODATA
                 }
             })
-            .collect();
-        bands.push(v);
+            .collect(),
+        other => {
+            return Err(PipelineError::Data(format!(
+                "{}: unsupported sample type {:?}",
+                path.display(),
+                std::mem::discriminant(&other)
+            )));
+        }
+    };
+    if raw.len() != n_px * FROST_BANDS {
+        return Err(PipelineError::Data(format!(
+            "{}: decoded {} samples, expected {}",
+            path.display(),
+            raw.len(),
+            n_px * FROST_BANDS
+        )));
     }
-    Ok(E5lFrost {
-        bands: bands
-            .try_into()
-            .map_err(|_| PipelineError::Data("frost_calendar band count".into()))?,
-    })
+    let mut bands = std::array::from_fn(|_| vec![NODATA; n_px]);
+    if planar == 2 {
+        for (b, dst) in bands.iter_mut().enumerate() {
+            dst.copy_from_slice(&raw[b * n_px..(b + 1) * n_px]);
+        }
+    } else {
+        for i in 0..n_px {
+            let base = i * FROST_BANDS;
+            for (b, dst) in bands.iter_mut().enumerate() {
+                dst[i] = raw[base + b];
+            }
+        }
+    }
+    Ok(E5lFrost { bands })
 }
 
 #[derive(Default)]
