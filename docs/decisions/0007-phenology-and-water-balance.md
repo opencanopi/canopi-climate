@@ -46,22 +46,20 @@
   3. Storing the curve directly also lets `v0.7.0`'s microclimate/elevation engine evaluate arbitrary
      topoclimatic `ΔT` offsets (elevation lapse rate, urban heat island, cold-air pooling) without
      introducing another layer.
-- **Hemisphere-aware chill window (7 months / ~212 days centered on thermal winter):**
-  - Reuses ADR 0006's per-pixel thermal winter (derived from 1991–2020 `ECMWF/ERA5_LAND/MONTHLY_AGGR`
-    warmest month `m_warm`, opposite `winter_m = ((m_warm + 5) % 12) + 1`).
-  - Accumulates Chill Portions over a **7-month (~212-day) winter window**: **Oct–Apr** for thermal-NH
-    pixels (`winter_m` in Oct–Mar) and **Apr–Oct** for thermal-SH pixels (`winter_m` in Apr–Sep).
+- **Hemisphere-aware chill window (7 months / ~212 days centered on winter):**
+  - Accumulates Chill Portions over a **7-month (~212-day) winter window**: **Oct–Apr** for Northern
+    Hemisphere (`lat >= 0`) and **Apr–Oct** for Southern Hemisphere (`lat < 0`).
     The 7-month span (~±105 days around midwinter) captures autumn/spring shoulder chill in cold
     continental and boreal sites where midwinter temperatures below `0 °C` contribute almost zero chill.
   - Tropics with `T > 13 °C` year-round yield valid `0` CP (never `NODATA`). Equatorial highlands (e.g.,
     Quito, Kiambu) accumulate cool-night chill year-round; `phenology` reports the single-season 7-month
-    accumulation centered on their thermal winter.
-- **Two-hourly closed-form Fishman (1987) ODE in GEE (monthly-chunked with 2-day warm-up):**
+    accumulation for their hemisphere.
+- **Four-hourly closed-form Fishman (1987) ODE in GEE (monthly-chunked with 2-day warm-up):**
   - Hourly ERA5-Land (`262,800` images/pixel) and full-season 212-day daily `iterate()` exceed GEE's
-    expression-graph complexity limits. Instead, we partition each 7-month winter into **7 parallel
+    expression-graph and EECU budgets. Instead, we partition each 7-month winter into **7 parallel
     monthly `iterate()` chunks** (each preceded by a 2-day warm-up overlap to initialize the short-memory
-    intermediate product `x`, discarding warm-up CP), running 12 two-hourly cosine diurnal steps per day
-    (`Δt = 2 h`, minimum at 03:00, maximum at 15:00) from `ECMWF/ERA5_LAND/DAILY_AGGR`
+    intermediate product `x`, discarding warm-up CP), running 6 four-hourly cosine diurnal steps per day
+    (`Δt = 4 h`, minimum at 03:00, maximum at 15:00) from `ECMWF/ERA5_LAND/DAILY_AGGR`
     (`temperature_2m_min`, `temperature_2m_max`):
     - $E_0 = 4153.5\text{ K}$, $E_1 = 12888.8\text{ K}$, $A_0 = 139500\text{ h}^{-1}$,
       $A_1 = 2.567 \times 10^{18}\text{ h}^{-1}$, $\text{slp} = 1.6\text{ K}^{-1}$, $T_{\text{elt}} = 277.0\text{ K}$.
@@ -71,8 +69,11 @@
       $\xi = 1 / (1 + \exp(-\text{ftmprt}))$.
     - When $x_{\text{inter}} \ge 1$: $\text{CP} \mathrel{+}= \xi \cdot x_{\text{inter}}$ and
       $x \leftarrow x_{\text{inter}} (1 - \xi)$; else $x \leftarrow x_{\text{inter}}$.
-  - Exported in **6 × 5-year chunks** (`1991–1995` … `2016–2020`), then averaged across the 6 chunks
-    locally in `cmd_combine()`.
+  - Exported in **12 × 5-year hemisphere chunks** (`nh` and `sh` × `1991–1995` … `2016–2020`) at 0.25°
+    (`1440×360` per hemisphere, `shardSize=128`), averaged locally per hemisphere, stacked, and bilinearly
+    resampled (with nearest coastal fallback) to ERA5-Land's 0.1° grid in `cmd_combine()`.
+    Verified against exact 1-hour Fishman across 5 cities × 5 warming shifts (max single-year diff ≤ 3.7 CP,
+    30-year mean diff < 1 CP).
 - **Regridding & lookup:** Bilinearly interpolated from ERA5-Land's 0.1° grid to canopi's cell centres
   (nearest-within-5-cells coastal fallback), clamped to non-negative integers. No spatial search at lookup:
   read at the climate answer's `(cell_lat, cell_lon)` in its `tile` (`phenology::at_cell`; WASM

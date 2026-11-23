@@ -21,16 +21,17 @@ the build inputs (`ee/era5land_phenology.tif`, `ee/terraclimate_water_balance.ti
      wettest month (from `ECMWF/ERA5_LAND/MONTHLY_AGGR`, 1991-2020) so SH/tropical dry seasons
      crossing Dec 31 -> Jan 1 are never split.
 
-3. `era5land_phenology_<y>` (30 x 1-year chunks: 1991..2020; 5 bands,
-   int16 tenths of CP, NODATA = -32768):
+3. `era5land_phenology_<hemi>_<y0>_<y1>` (12 x 5-year hemisphere chunks: `nh` and `sh` x
+   1991-1995 .. 2016-2020; 5 bands, int16 tenths of CP, NODATA = -32768, exported at 0.25-deg
+   `1440x360` per hemisphere with `shardSize=128` and bilinearly resampled to `GRID_E5L` 0.1-deg
+   in `combine`):
    From `ECMWF/ERA5_LAND/DAILY_AGGR` (`temperature_2m_min`, `temperature_2m_max`):
    Fishman (1987) Dynamic Model Chill Portions accumulated over a 7-month (~212-day) winter
-   window (Oct-Apr for thermal-NH pixels where `winter_month` is Oct-Mar, Apr-Oct for
-   thermal-SH pixels where `winter_month` is Apr-Sep, derived from `MONTHLY_AGGR` 1991-2020).
+   window (Oct-Apr for NH `0..90N`, Apr-Oct for SH `90S..0`).
    Uses 7 parallel monthly `iterate()` chunks (each with a 2-day warm-up overlap to initialize
-   the intermediate product `x`, `float32` accumulator, and `shardSize=64` to stay well within
-   GEE worker memory) and 12 two-hourly closed-form ODE steps per day across
-   dT in {0, +1, +2, +3, +4 C}:
+   the intermediate product `x`, `float32` accumulator) and 6 four-hourly closed-form ODE steps
+   per day (`DT_HOURS = 4.0`, matching exact 1-hour Fishman within ~1-3 CP on single-year spot
+   checks and <1 CP on 30-year climatology) across dT in {0, +1, +2, +3, +4 C}:
    - `chill_portions_0c`, `chill_portions_1c`, `chill_portions_2c`,
      `chill_portions_3c`, `chill_portions_4c`
 
@@ -67,10 +68,29 @@ GRID_E5L = dict(
 
 TC_NAME = "terraclimate_water_balance"
 CDD_CHUNKS = [(1991, 2000), (2001, 2010), (2011, 2020)]
-# 1-year chunks keep each Fishman Dynamic Chill Portions DAG 5x smaller than 5-year chunks
-# and avoid GEE worker OOM when paired with float32 iterate() state and shardSize=64.
-PHENO_CHUNKS = [(y, y) for y in range(BASE[0], BASE[1] + 1)]
-PHENO_SHARD_SIZE = 64
+# 6 x 5-year chunks x 2 hemispheres (NH 0..90N, SH 90S..0) at 0.25-deg with DT_HOURS=4.0:
+# ~50x fewer pixel-ODE-steps/yr than global 0.1-deg 2-hourly dual-hemisphere exports.
+PHENO_CHUNKS = [
+    (1991, 1995),
+    (1996, 2000),
+    (2001, 2005),
+    (2006, 2010),
+    (2011, 2015),
+    (2016, 2020),
+]
+PHENO_HEMIS = ("nh", "sh")
+PHENO_SHARD_SIZE = 128
+
+GRID_PHENO_NH = dict(
+    crs="EPSG:4326",
+    crsTransform=[0.25, 0, -180.0, 0, -0.25, 90.0],
+    dimensions="1440x360",
+)
+GRID_PHENO_SH = dict(
+    crs="EPSG:4326",
+    crsTransform=[0.25, 0, -180.0, 0, -0.25, 0.0],
+    dimensions="1440x360",
+)
 
 TC_BANDS = ["cwd_mm", "cwd_p90_mm", "vpd_summer_kpa"]
 PHENO_BANDS = [
@@ -81,22 +101,22 @@ PHENO_BANDS = [
     "chill_portions_4c",
 ]
 
-DT_HOURS = 2.0  # 12 two-hourly closed-form Fishman ODE steps per day
+DT_HOURS = 4.0  # 6 four-hourly closed-form Fishman ODE steps per day
 
 
 def cdd_chunk_name(y0: int, y1: int) -> str:
     return f"era5land_cdd_{y0}_{y1}"
 
 
-def pheno_chunk_name(y0: int, y1: int) -> str:
-    return f"era5land_phenology_{y0}" if y0 == y1 else f"era5land_phenology_{y0}_{y1}"
+def pheno_chunk_name(hemi: str, y0: int, y1: int) -> str:
+    return f"era5land_phenology_{hemi}_{y0}_{y1}"
 
 
 def all_task_names() -> list[str]:
     return (
         [TC_NAME]
         + [cdd_chunk_name(a, b) for a, b in CDD_CHUNKS]
-        + [pheno_chunk_name(a, b) for a, b in PHENO_CHUNKS]
+        + [pheno_chunk_name(h, a, b) for h in PHENO_HEMIS for a, b in PHENO_CHUNKS]
     )
 
 
@@ -241,20 +261,20 @@ def cdd_chunk_image(y0: int, y1: int) -> ee.Image:
     return yearly.mean().updateMask(land_mask).rename("cdd_max_days")
 
 
-def phenology_chunk_image(y0: int, y1: int) -> ee.Image:
+def phenology_chunk_image(y0: int, y1: int, hemi: str | None = None) -> ee.Image:
     """Compute 5-band Fishman Dynamic Chill Portions (dT = 0..+4 C) mean for years [y0..=y1].
 
     Uses 7 parallel monthly `iterate()` chunks per winter season (each with a 2-day warm-up
-    overlap to initialize intermediate chill `x`) and 12 two-hourly closed-form ODE steps per day.
-    Thermal-NH pixels (`winter_m` in Oct-Mar) sum Oct(y)-Apr(y+1); thermal-SH pixels
-    (`winter_m` in Apr-Sep) sum Apr(y)-Oct(y).
+    overlap to initialize intermediate chill `x`, `float32` accumulator) and 6 four-hourly
+    closed-form ODE steps per day (`DT_HOURS = 4.0`).
+    When `hemi` is `"nh"` or `"sh"`, evaluates only that hemisphere's 7-month winter window
+    (`Oct(y)-Apr(y+1)` for NH, `Apr(y)-Oct(y)` for SH) without reading ERA5 monthly data.
+    When `hemi` is `None` (used by `check`), blends NH/SH at the equator (`lat >= 0`).
     """
-    winter_m = thermal_winter_month_image()
-    land_mask = winter_m.mask()
-    is_nh_winter = winter_m.lte(3).Or(winter_m.gte(10))
-
     daily_t = ee.ImageCollection(ERA5_DAILY).select(["temperature_2m_min", "temperature_2m_max"])
-    cos_w = [-0.5 * math.cos(2.0 * math.pi * (h - 3.0) / 24.0) for h in range(0, 24, int(DT_HOURS))]
+    land_mask = daily_t.first().select("temperature_2m_min").mask()
+    n_steps = int(round(24.0 / DT_HOURS))
+    cos_w = [-0.5 * math.cos(2.0 * math.pi * (h * DT_HOURS - 3.0) / 24.0) for h in range(n_steps)]
     dt_shifts = ee.Image.constant([0.0, 1.0, 2.0, 3.0, 4.0]).toFloat()
     x_bands = [f"x_{i}" for i in range(5)]
     cp_bands = PHENO_BANDS
@@ -317,9 +337,14 @@ def phenology_chunk_image(y0: int, y1: int) -> ee.Image:
             ee.Date.fromYMD(y, 9, 1),
             ee.Date.fromYMD(y, 10, 1),
         ])
+        if hemi == "nh":
+            return ee.ImageCollection(nh_starts.map(fishman_month)).sum().updateMask(land_mask).toFloat()
+        if hemi == "sh":
+            return ee.ImageCollection(sh_starts.map(fishman_month)).sum().updateMask(land_mask).toFloat()
+        is_nh = ee.Image.pixelLonLat().select("latitude").gte(0.0)
         nh = ee.ImageCollection(nh_starts.map(fishman_month)).sum()
         sh = ee.ImageCollection(sh_starts.map(fishman_month)).sum()
-        return sh.where(is_nh_winter, nh).updateMask(land_mask).toFloat()
+        return sh.where(is_nh, nh).updateMask(land_mask).toFloat()
 
     if y0 == y1:
         return season_cp(y0).select(PHENO_BANDS)
@@ -327,14 +352,14 @@ def phenology_chunk_image(y0: int, y1: int) -> ee.Image:
     return yearly.mean().updateMask(land_mask).select(PHENO_BANDS)
 
 
-def export_img(img: ee.Image, name: str, shard_size: int | None = None) -> str:
+def export_img(img: ee.Image, name: str, grid: dict | None = None, shard_size: int | None = None) -> str:
     kwargs = dict(
         image=img,
         description=name,
         folder=DRIVE_FOLDER,
         fileNamePrefix=name,
         maxPixels=1e10,
-        **GRID_E5L,
+        **(grid or GRID_E5L),
     )
     if shard_size is not None:
         kwargs["shardSize"] = shard_size
@@ -398,9 +423,11 @@ def cmd_export(args) -> None:
             export_img(img, cdd_chunk_name(y0, y1))
 
     if "pheno" in which:
-        for y0, y1 in PHENO_CHUNKS:
-            img = phenology_chunk_image(y0, y1).multiply(10).round().toInt16().unmask(NODATA, False)
-            export_img(img, pheno_chunk_name(y0, y1), shard_size=PHENO_SHARD_SIZE)
+        for hemi in PHENO_HEMIS:
+            grid = GRID_PHENO_NH if hemi == "nh" else GRID_PHENO_SH
+            for y0, y1 in PHENO_CHUNKS:
+                img = phenology_chunk_image(y0, y1, hemi=hemi).multiply(10).round().toInt16().unmask(NODATA, False)
+                export_img(img, pheno_chunk_name(hemi, y0, y1), grid=grid, shard_size=PHENO_SHARD_SIZE)
 
 
 def cmd_status(args) -> None:
@@ -501,20 +528,64 @@ def cmd_combine(args) -> None:
         out_arr = np.where(np.isnan(mean_cdd), NODATA, np.rint(mean_cdd)).astype(np.int16)[None, :, :]
         _write_gtiff(out / "era5land_cdd.tif", out_arr, prof, ["cdd_max_days"])
 
-    # 3. ERA5-Land Phenology (average 30 x 1-year chunks stored in tenths -> int16 CP)
-    ph_paths = [raw / f"{pheno_chunk_name(a, b)}.tif" for a, b in PHENO_CHUNKS]
-    if all(p.exists() for p in ph_paths):
-        arrays = []
-        prof = None
-        for p in ph_paths:
-            with rasterio.open(p) as src:
-                arr = src.read().astype(np.float32)
-                arr[arr == NODATA] = np.nan
-                arrays.append(arr / 10.0)
-                if prof is None:
-                    prof = src.profile
-        mean_ph = np.nanmean(np.stack(arrays, axis=0), axis=0)
+    # 3. ERA5-Land Phenology (average 6 x 5-year chunks per hemisphere at 0.25-deg, stack NH+SH,
+    #    and bilinearly resample to GRID_E5L 0.1-deg with nearest fallback for coastal cells -> int16 CP)
+    nh_paths = [raw / f"{pheno_chunk_name('nh', a, b)}.tif" for a, b in PHENO_CHUNKS]
+    sh_paths = [raw / f"{pheno_chunk_name('sh', a, b)}.tif" for a, b in PHENO_CHUNKS]
+    if all(p.exists() for p in nh_paths + sh_paths):
+        from rasterio.transform import Affine
+        from rasterio.warp import Resampling, reproject
+
+        def mean_hemi(paths):
+            arrays = []
+            for p in paths:
+                with rasterio.open(p) as src:
+                    arr = src.read().astype(np.float32)
+                    arr[arr == NODATA] = np.nan
+                    arrays.append(arr / 10.0)
+            return np.nanmean(np.stack(arrays, axis=0), axis=0)
+
+        nh_mean = mean_hemi(nh_paths)
+        sh_mean = mean_hemi(sh_paths)
+        global_025 = np.concatenate([nh_mean, sh_mean], axis=1)  # (5, 720, 1440)
+        src_transform = Affine(0.25, 0.0, -180.0, 0.0, -0.25, 90.0)
+        dst_transform = Affine(0.1, 0.0, -180.05, 0.0, -0.1, 90.05)
+        dst_shape = (len(PHENO_BANDS), 1801, 3600)
+
+        dst_bilin = np.full(dst_shape, np.nan, dtype=np.float32)
+        dst_near = np.full(dst_shape, np.nan, dtype=np.float32)
+        for b in range(len(PHENO_BANDS)):
+            reproject(
+                source=global_025[b],
+                destination=dst_bilin[b],
+                src_transform=src_transform,
+                src_crs="EPSG:4326",
+                dst_transform=dst_transform,
+                dst_crs="EPSG:4326",
+                src_nodata=np.nan,
+                dst_nodata=np.nan,
+                resampling=Resampling.bilinear,
+            )
+            reproject(
+                source=global_025[b],
+                destination=dst_near[b],
+                src_transform=src_transform,
+                src_crs="EPSG:4326",
+                dst_transform=dst_transform,
+                dst_crs="EPSG:4326",
+                src_nodata=np.nan,
+                dst_nodata=np.nan,
+                resampling=Resampling.nearest,
+            )
+        mean_ph = np.where(np.isnan(dst_bilin), dst_near, dst_bilin)
         out_arr = np.where(np.isnan(mean_ph), NODATA, np.rint(np.clip(mean_ph, 0.0, 250.0))).astype(np.int16)
+        prof = {
+            "driver": "GTiff",
+            "crs": "EPSG:4326",
+            "transform": dst_transform,
+            "width": 3600,
+            "height": 1801,
+        }
         _write_gtiff(out / "era5land_phenology.tif", out_arr, prof, PHENO_BANDS)
 
 
