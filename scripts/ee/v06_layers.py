@@ -21,14 +21,15 @@ the build inputs (`ee/era5land_phenology.tif`, `ee/terraclimate_water_balance.ti
      wettest month (from `ECMWF/ERA5_LAND/MONTHLY_AGGR`, 1991-2020) so SH/tropical dry seasons
      crossing Dec 31 -> Jan 1 are never split.
 
-3. `era5land_phenology_<y0>_<y1>` (6 x 5-year chunks: 1991-1995 .. 2016-2020; 5 bands,
+3. `era5land_phenology_<y>` (30 x 1-year chunks: 1991..2020; 5 bands,
    int16 tenths of CP, NODATA = -32768):
    From `ECMWF/ERA5_LAND/DAILY_AGGR` (`temperature_2m_min`, `temperature_2m_max`):
    Fishman (1987) Dynamic Model Chill Portions accumulated over a 7-month (~212-day) winter
    window (Oct-Apr for thermal-NH pixels where `winter_month` is Oct-Mar, Apr-Oct for
    thermal-SH pixels where `winter_month` is Apr-Sep, derived from `MONTHLY_AGGR` 1991-2020).
    Uses 7 parallel monthly `iterate()` chunks (each with a 2-day warm-up overlap to initialize
-   the intermediate product `x`) and 12 two-hourly closed-form ODE steps per day across
+   the intermediate product `x`, `float32` accumulator, and `shardSize=64` to stay well within
+   GEE worker memory) and 12 two-hourly closed-form ODE steps per day across
    dT in {0, +1, +2, +3, +4 C}:
    - `chill_portions_0c`, `chill_portions_1c`, `chill_portions_2c`,
      `chill_portions_3c`, `chill_portions_4c`
@@ -66,14 +67,10 @@ GRID_E5L = dict(
 
 TC_NAME = "terraclimate_water_balance"
 CDD_CHUNKS = [(1991, 2000), (2001, 2010), (2011, 2020)]
-PHENO_CHUNKS = [
-    (1991, 1995),
-    (1996, 2000),
-    (2001, 2005),
-    (2006, 2010),
-    (2011, 2015),
-    (2016, 2020),
-]
+# 1-year chunks keep each Fishman Dynamic Chill Portions DAG 5x smaller than 5-year chunks
+# and avoid GEE worker OOM when paired with float32 iterate() state and shardSize=64.
+PHENO_CHUNKS = [(y, y) for y in range(BASE[0], BASE[1] + 1)]
+PHENO_SHARD_SIZE = 64
 
 TC_BANDS = ["cwd_mm", "cwd_p90_mm", "vpd_summer_kpa"]
 PHENO_BANDS = [
@@ -92,7 +89,7 @@ def cdd_chunk_name(y0: int, y1: int) -> str:
 
 
 def pheno_chunk_name(y0: int, y1: int) -> str:
-    return f"era5land_phenology_{y0}_{y1}"
+    return f"era5land_phenology_{y0}" if y0 == y1 else f"era5land_phenology_{y0}_{y1}"
 
 
 def all_task_names() -> list[str]:
@@ -296,7 +293,7 @@ def phenology_chunk_image(y0: int, y1: int) -> ee.Image:
                 trig = x_inter.gte(1.0)
                 cp = cp.add(x_inter.multiply(xi).multiply(trig).multiply(count_it))
                 x = x_inter.where(trig, x_inter.multiply(ee.Image.constant(1.0).subtract(xi)))
-            return x.rename(x_bands).addBands(cp.rename(cp_bands))
+            return x.toFloat().rename(x_bands).addBands(cp.toFloat().rename(cp_bands))
 
         return ee.Image(days.iterate(step, init)).select(cp_bands)
 
@@ -324,12 +321,14 @@ def phenology_chunk_image(y0: int, y1: int) -> ee.Image:
         sh = ee.ImageCollection(sh_starts.map(fishman_month)).sum()
         return sh.where(is_nh_winter, nh).updateMask(land_mask).toFloat()
 
+    if y0 == y1:
+        return season_cp(y0).select(PHENO_BANDS)
     yearly = ee.ImageCollection(ee.List.sequence(y0, y1).map(season_cp))
     return yearly.mean().updateMask(land_mask).select(PHENO_BANDS)
 
 
-def export_img(img: ee.Image, name: str) -> str:
-    task = ee.batch.Export.image.toDrive(
+def export_img(img: ee.Image, name: str, shard_size: int | None = None) -> str:
+    kwargs = dict(
         image=img,
         description=name,
         folder=DRIVE_FOLDER,
@@ -337,6 +336,9 @@ def export_img(img: ee.Image, name: str) -> str:
         maxPixels=1e10,
         **GRID_E5L,
     )
+    if shard_size is not None:
+        kwargs["shardSize"] = shard_size
+    task = ee.batch.Export.image.toDrive(**kwargs)
     task.start()
     print(f"started {name}: {task.id}")
     return task.id
@@ -398,7 +400,7 @@ def cmd_export(args) -> None:
     if "pheno" in which:
         for y0, y1 in PHENO_CHUNKS:
             img = phenology_chunk_image(y0, y1).multiply(10).round().toInt16().unmask(NODATA, False)
-            export_img(img, pheno_chunk_name(y0, y1))
+            export_img(img, pheno_chunk_name(y0, y1), shard_size=PHENO_SHARD_SIZE)
 
 
 def cmd_status(args) -> None:
@@ -499,7 +501,7 @@ def cmd_combine(args) -> None:
         out_arr = np.where(np.isnan(mean_cdd), NODATA, np.rint(mean_cdd)).astype(np.int16)[None, :, :]
         _write_gtiff(out / "era5land_cdd.tif", out_arr, prof, ["cdd_max_days"])
 
-    # 3. ERA5-Land Phenology (average 6 x 5-year chunks stored in tenths -> int16 CP)
+    # 3. ERA5-Land Phenology (average 30 x 1-year chunks stored in tenths -> int16 CP)
     ph_paths = [raw / f"{pheno_chunk_name(a, b)}.tif" for a, b in PHENO_CHUNKS]
     if all(p.exists() for p in ph_paths):
         arrays = []
