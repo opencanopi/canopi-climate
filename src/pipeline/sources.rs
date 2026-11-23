@@ -455,6 +455,24 @@ const ERA5_LAND_FROST_FILES: &[PinnedFile] = &[pin(
     "3926d7862a34e8f716f4b8846de7f484dbf3b46614fc3cf12dee4c9636853e03",
 )];
 
+const ERA5_LAND_PHENO_FILES: &[PinnedFile] = &[pin(
+    "ee/era5land_phenology.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.6.0/era5land_phenology.tif",
+    "3977dc9cb993019b3ad188fbd220b9ebea3209e15f6e1f40df2fbc74f0e4e230",
+)];
+
+const TERRACLIMATE_WB_FILES: &[PinnedFile] = &[pin(
+    "ee/terraclimate_water_balance.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.6.0/terraclimate_water_balance.tif",
+    "9f0792e404af9f088d6a5ba23f8d6c85ae405a25290aa2015046ffefb213c68f",
+)];
+
+const ERA5_LAND_CDD_FILES: &[PinnedFile] = &[pin(
+    "ee/era5land_cdd.tif",
+    "https://github.com/opencanopi/canopi-climate/releases/download/v0.6.0/era5land_cdd.tif",
+    "63e0ac177fc9d5237b8898c159ac44c522528ace4890f8fafa987de817ebb186",
+)];
+
 /// Every source, grid inputs first.
 pub const SOURCES: &[Source] = &[
     Source {
@@ -578,6 +596,39 @@ pub const SOURCES: &[Source] = &[
         required: true,
         layer: "frost_calendar",
     },
+    Source {
+        id: "era5-land-phenology",
+        title: "ERA5-Land daily aggregates (ECMWF/ERA5_LAND/DAILY_AGGR on Google Earth Engine), Fishman (1987) Dynamic Model Chill Portions across +0..+4 C warming, 1991-2020",
+        citation: "Muñoz-Sabater, J., et al. (2021). ERA5-Land: a state-of-the-art global reanalysis dataset for land applications. Earth System Science Data 13, 4349-4383. https://doi.org/10.5194/essd-13-4349-2021. Fishman, S., Erez, A., Couvillon, G. A. (1987). The temperature dependence of dormancy breaking in plants. J. Theor. Biol. 124, 473-483. Contains modified Copernicus Climate Change Service information.",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_DAILY_AGGR",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Computed by scripts/ee/v06_layers.py (pheno-fetch + combine) via continuous 1-hour (24 steps/day) Fishman ODE integration over 30 winter seasons (1991-2020) for warming shifts 0..+4 C, bilinearly resampled from 0.25-deg to GRID_E5L (0.1-deg); int16 Chill Portions.",
+        files: ERA5_LAND_PHENO_FILES,
+        required: true,
+        layer: "phenology",
+    },
+    Source {
+        id: "terraclimate-water-balance",
+        title: "TerraClimate monthly climate and climatic water balance (IDAHO_EPSCOR/TERRACLIMATE on Google Earth Engine), CWD mean/P90 and peak-quarter VPD, 1991-2020",
+        citation: "Abatzoglou, J. T., Dobrowski, S. Z., Parks, S. A., Hegewisch, K. C. (2018). TerraClimate, a high-resolution global dataset of monthly climate and climatic water balance from 1958-2015. Scientific Data 5, 170191. https://doi.org/10.1038/sdata.2017.191",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_TERRACLIMATE",
+        licence: "CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/)",
+        notes: "Reduced on Earth Engine by scripts/ee/v06_layers.py onto GRID_E5L (0.1-deg): annual Climatic Water Deficit mean and 90th percentile (mm/yr), and peak-quarter VPD (kPa x 100); int16.",
+        files: TERRACLIMATE_WB_FILES,
+        required: true,
+        layer: "water_balance",
+    },
+    Source {
+        id: "era5-land-cdd",
+        title: "ERA5-Land daily aggregates (ECMWF/ERA5_LAND/DAILY_AGGR on Google Earth Engine), wettest-month-anchored max consecutive dry days (< 1 mm/day), 1991-2020",
+        citation: "Muñoz-Sabater, J., et al. (2021). ERA5-Land: a state-of-the-art global reanalysis dataset for land applications. Earth System Science Data 13, 4349-4383. https://doi.org/10.5194/essd-13-4349-2021. Contains modified Copernicus Climate Change Service information.",
+        landing: "https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_DAILY_AGGR",
+        licence: "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)",
+        notes: "Reduced on Earth Engine by scripts/ee/v06_layers.py on GRID_E5L (0.1-deg) across three 10-year chunks (1991-2020): mean annual maximum consecutive dry days (< 1 mm/day) anchored to each cell's wettest month; int16 days.",
+        files: ERA5_LAND_CDD_FILES,
+        required: true,
+        layer: "water_balance",
+    },
 ];
 
 /// Base URL of CHELSA climatologies (for documentation).
@@ -681,6 +732,8 @@ mod tests {
             "monthly",
             "extremes_tail",
             "frost_calendar",
+            "phenology",
+            "water_balance",
         ] {
             assert!(!manifest_sources(layer).is_empty(), "{layer}");
         }
@@ -702,6 +755,9 @@ mod tests {
                 + NEX_GDDP_FILES.len()
                 + ERA5_LAND_TAIL_FILES.len()
                 + ERA5_LAND_FROST_FILES.len()
+                + ERA5_LAND_PHENO_FILES.len()
+                + TERRACLIMATE_WB_FILES.len()
+                + ERA5_LAND_CDD_FILES.len()
         );
         assert!(problems[0].starts_with("missing beck2023/"));
         assert!(pinned(&dir, "chelsa/CHELSA_bio6_1981-2010_V.2.1.tif").is_ok());

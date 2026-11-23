@@ -6,12 +6,15 @@
 //! centres, with nearest-within-5-cells coastal fallback.
 //! Method: `docs/decisions/0007-phenology-and-water-balance.md`.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use serde_json::json;
-use wbgeotiff::GeoTiff;
+use tiff::decoder::{Decoder, DecodingResult, Limits};
+use tiff::tags::Tag;
 
 use super::build::{BuildConfig, diff_stats};
 use super::{PipelineError, Result, cog, layers};
@@ -92,31 +95,68 @@ impl E5lBand {
 }
 
 fn read_input(path: &Path) -> Result<[E5lBand; PHENOLOGY_BANDS]> {
-    let t = GeoTiff::open(path)?;
-    if (t.width() as usize, t.height() as usize) != (E5L_W, E5L_H) {
+    let f = File::open(path).map_err(|e| PipelineError::io(path, e))?;
+    let mut dec = Decoder::new(BufReader::new(f))
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+        .with_limits(Limits::unlimited());
+    let (w, h) = dec
+        .dimensions()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?;
+    if (w as usize, h as usize) != (E5L_W, E5L_H) {
         return Err(PipelineError::Data(format!(
-            "{}: {}x{}, expected {E5L_W}x{E5L_H}",
-            path.display(),
-            t.width(),
-            t.height()
+            "{}: {w}x{h}, expected {E5L_W}x{E5L_H}",
+            path.display()
         )));
     }
-    if t.band_count() != PHENOLOGY_BANDS {
+    let spp =
+        dec.get_tag_u32(Tag::SamplesPerPixel)
+            .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))? as usize;
+    if spp != PHENOLOGY_BANDS {
         return Err(PipelineError::Data(format!(
-            "{}: {} bands, expected {PHENOLOGY_BANDS}",
-            path.display(),
-            t.band_count()
+            "{}: {spp} bands, expected {PHENOLOGY_BANDS}",
+            path.display()
         )));
     }
-    let mut bands = Vec::with_capacity(PHENOLOGY_BANDS);
-    for b in 0..PHENOLOGY_BANDS {
-        bands.push(E5lBand {
-            data: t.read_band_f32(b)?,
-        });
+    let planar = dec.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1);
+    let n_px = E5L_W * E5L_H;
+    let raw: Vec<f32> = match dec
+        .read_image()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+    {
+        DecodingResult::I16(v) => v.into_iter().map(f32::from).collect(),
+        DecodingResult::F32(v) => v,
+        other => {
+            return Err(PipelineError::Data(format!(
+                "{}: unsupported sample type {:?}",
+                path.display(),
+                std::mem::discriminant(&other)
+            )));
+        }
+    };
+    if raw.len() != n_px * PHENOLOGY_BANDS {
+        return Err(PipelineError::Data(format!(
+            "{}: decoded {} samples, expected {}",
+            path.display(),
+            raw.len(),
+            n_px * PHENOLOGY_BANDS
+        )));
     }
-    bands
-        .try_into()
-        .map_err(|_| PipelineError::Data("phenology band count".into()))
+    let mut bands = std::array::from_fn(|_| E5lBand {
+        data: vec![f32::from(NODATA); n_px],
+    });
+    if planar == 2 {
+        for (b, dst) in bands.iter_mut().enumerate() {
+            dst.data.copy_from_slice(&raw[b * n_px..(b + 1) * n_px]);
+        }
+    } else {
+        for i in 0..n_px {
+            let base = i * PHENOLOGY_BANDS;
+            for (b, dst) in bands.iter_mut().enumerate() {
+                dst.data[i] = raw[base + b];
+            }
+        }
+    }
+    Ok(bands)
 }
 
 #[derive(Default)]

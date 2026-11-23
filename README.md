@@ -46,6 +46,15 @@ Two static agroecological risk layers and a compact Climate Twin index (0.5.0), 
 | `frost_calendar` | 0.1° | `last_spring_frost_doy`, `last_spring_frost_p90_doy`, `first_autumn_frost_doy`, `frost_free_days`, `frost_year_pct`, `false_spring_pct`, `regime` | Hemisphere-aware frost calendar anchored to thermal winter, plus false-spring killing-freeze risk (Tmin ≤ −2 °C after ≥ 150 GDD₅) |
 | `analogues.bin` | 1.0° (~22k cells, 553 KB) | `findAnalogues` / `canopi-climate analogues` | Phase-invariant 8D z-score k-NN index for finding historical Climate Twins of future (2050/2085) climates in Rust & WASM |
 
+Two static phenology & water-balance layers plus two 0-byte derived calculators (0.6.0), built from ERA5-Land hourly/daily and TerraClimate (1991–2020):
+
+| Layer / Derived | Resolution | Fields | Meaning |
+|---|---|---|---|
+| `phenology` | 0.1° | `chill_portions_0c` … `chill_portions_4c` | Fishman Dynamic Chill Portions across `+0 °C … +4 °C` warming bands (plus `chillPortionsAt(p, deltaC)` linear interpolation) |
+| `water_balance` | 0.1° | `cwd_mm`, `cwd_p90_mm`, `cdd_max_days`, `vpd_summer_kpa` | TerraClimate mean/P90 climatic water deficit & summer VPD, plus ERA5-Land max consecutive dry days (< 1 mm) |
+| `photoperiod` | 0 bytes | `dayLengthHours`, `photoperiodProfile` | Pole-hardened FAO-56 astronomical day-length and solstice range |
+| `awc` | 0 bytes | `soilAwcMmPerM` | Saxton–Rawls (2006) plant-available water capacity (mm/m) derived from `soil` sand/clay fractions |
+
 Two site layers, on a finer 0.05° grid (about 5.5 km) in the same 10° tiles,
 describe the place itself:
 
@@ -148,11 +157,11 @@ soil 45 KB, monthly_precip 14 KB and regions 1.4 KB.
 ### Command line
 
 ```sh
-canopi-climate lookup 48.8566 2.3522 --grid out-v0.5          # JSON: climate, soil, regions, extremes, monthly, monthly_precip, extremes_tail, frost_calendar
-canopi-climate analogues 45.7640 4.8357 --grid out-v0.5       # JSON: 2041-2070 SSP2-4.5 historical Climate Twins
-canopi-climate sample points.csv --grid out-v0.5 -o climate.csv
-canopi-climate sample points.csv --grid out-v0.5 --regions --extremes --monthly
-canopi-climate verify-grid out-v0.5                           # sizes, SHA-256, every tile decoded
+canopi-climate lookup 48.8566 2.3522 --grid out-v0.6          # JSON: climate, soil, regions, extremes, monthly, monthly_precip, extremes_tail, frost_calendar, phenology, water_balance
+canopi-climate analogues 45.7640 4.8357 --grid out-v0.6       # JSON: 2041-2070 SSP2-4.5 historical Climate Twins
+canopi-climate sample points.csv --grid out-v0.6 -o climate.csv
+canopi-climate sample points.csv --grid out-v0.6 --regions --extremes --monthly
+canopi-climate verify-grid out-v0.6                           # sizes, SHA-256, every tile decoded
 canopi-climate sources                                        # source files, URLs, SHA-256
 ```
 

@@ -8,12 +8,15 @@
 //! centres, with nearest-within-5-cells coastal fallback.
 //! Method: `docs/decisions/0007-phenology-and-water-balance.md`.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use serde_json::json;
-use wbgeotiff::GeoTiff;
+use tiff::decoder::{Decoder, DecodingResult, Limits};
+use tiff::tags::Tag;
 
 use super::build::{BuildConfig, diff_stats};
 use super::{PipelineError, Result, cog, layers};
@@ -100,44 +103,91 @@ impl E5lBand {
     }
 }
 
-fn open_checked(path: &Path, expected_bands: usize) -> Result<GeoTiff> {
-    let t = GeoTiff::open(path)?;
-    if (t.width() as usize, t.height() as usize) != (E5L_W, E5L_H) {
+fn read_bands(path: &Path, expected_bands: usize) -> Result<Vec<Vec<f32>>> {
+    let f = File::open(path).map_err(|e| PipelineError::io(path, e))?;
+    let mut dec = Decoder::new(BufReader::new(f))
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+        .with_limits(Limits::unlimited());
+    let (w, h) = dec
+        .dimensions()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?;
+    if (w as usize, h as usize) != (E5L_W, E5L_H) {
         return Err(PipelineError::Data(format!(
-            "{}: {}x{}, expected {E5L_W}x{E5L_H}",
-            path.display(),
-            t.width(),
-            t.height()
+            "{}: {w}x{h}, expected {E5L_W}x{E5L_H}",
+            path.display()
         )));
     }
-    if t.band_count() != expected_bands {
+    let spp =
+        dec.get_tag_u32(Tag::SamplesPerPixel)
+            .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))? as usize;
+    if spp != expected_bands {
         return Err(PipelineError::Data(format!(
-            "{}: {} bands, expected {expected_bands}",
-            path.display(),
-            t.band_count()
+            "{}: {spp} bands, expected {expected_bands}",
+            path.display()
         )));
     }
-    Ok(t)
+    let planar = dec.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1);
+    let n_px = E5L_W * E5L_H;
+    let raw: Vec<f32> = match dec
+        .read_image()
+        .map_err(|e| PipelineError::Data(format!("{}: {e}", path.display())))?
+    {
+        DecodingResult::I16(v) => v.into_iter().map(f32::from).collect(),
+        DecodingResult::F32(v) => v,
+        other => {
+            return Err(PipelineError::Data(format!(
+                "{}: unsupported sample type {:?}",
+                path.display(),
+                std::mem::discriminant(&other)
+            )));
+        }
+    };
+    if raw.len() != n_px * expected_bands {
+        return Err(PipelineError::Data(format!(
+            "{}: decoded {} samples, expected {}",
+            path.display(),
+            raw.len(),
+            n_px * expected_bands
+        )));
+    }
+    let mut bands = vec![vec![f32::from(NODATA); n_px]; expected_bands];
+    if planar == 2 || expected_bands == 1 {
+        for (b, dst) in bands.iter_mut().enumerate() {
+            dst.copy_from_slice(&raw[b * n_px..(b + 1) * n_px]);
+        }
+    } else {
+        for i in 0..n_px {
+            let base = i * expected_bands;
+            for (b, dst) in bands.iter_mut().enumerate() {
+                dst[i] = raw[base + b];
+            }
+        }
+    }
+    Ok(bands)
 }
 
 fn read_inputs(tc_path: &Path, cdd_path: &Path) -> Result<[E5lBand; WATER_BALANCE_BANDS]> {
-    let tc = open_checked(tc_path, 3)?;
-    let cdd = open_checked(cdd_path, 1)?;
+    let [cwd, cwd_p90, vpd]: [Vec<f32>; 3] = read_bands(tc_path, 3)?
+        .try_into()
+        .map_err(|_| PipelineError::Data(format!("{}: expected 3 bands", tc_path.display())))?;
+    let [cdd_max]: [Vec<f32>; 1] = read_bands(cdd_path, 1)?
+        .try_into()
+        .map_err(|_| PipelineError::Data(format!("{}: expected 1 band", cdd_path.display())))?;
     Ok([
         E5lBand {
-            data: tc.read_band_f32(0)?,
+            data: cwd,
             scale: 1.0,
         },
         E5lBand {
-            data: tc.read_band_f32(1)?,
+            data: cwd_p90,
             scale: 1.0,
         },
         E5lBand {
-            data: cdd.read_band_f32(0)?,
+            data: cdd_max,
             scale: 1.0,
         },
         E5lBand {
-            data: tc.read_band_f32(2)?,
+            data: vpd,
             scale: 0.01,
         },
     ])

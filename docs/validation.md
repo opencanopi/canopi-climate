@@ -1,6 +1,6 @@
 # Validation
 
-Grid v0.5 (`out-v0.5`) against ERA5 1991–2020 normals at 29 cities covering
+Grid v0.6 (`out-v0.6`) against ERA5 1991–2020 normals at 29 cities covering
 every Köppen main group (the 22 core cities plus 7 Plant Palette persona
 cities: Kiambu, Recife, Oulu, Mendoza, Kumasi, Osaka, Riyadh). Regenerate this
 table after a grid change; the commands are in `examples/validation.rs`.
@@ -261,6 +261,39 @@ top 2041–2070 SSP2-4.5 historical Climate Twin):
 | Kiambu | −0.7 / +1.3 | 0.0 | +0.5 | frost-free | 365 (0% yrs) | 0 | E. Cape, ZA `Cfa` / S. Uganda `Aw` (0.073) |
 | Paris | −3.3 / +3.3 | 0.8 | +0.8 | 91 (110) / 325 | 233 | 7 | Loire Valley / Toulouse, FR `Cfb` (0.067) |
 | Canberra | −0.8 / +2.3 | 1.8 | +0.3 | 256 (275) / 135 | 247 | 0 | Mudgee, NSW AU `Cfa` (0.048) |
+
+### Phenology, photoperiod, and water balance (`v0.6.0`)
+
+Global `out-v0.6` build-report checks (0 `SHA256SUMS` diffs on all prior `v0.5.0`
+layers; `climate_tiles_sha256` unchanged; `verify-grid`: 464 climate tiles,
+3,748 layer tiles, 0 problems):
+
+- `phenology`: 411 tiles (2.14 MB, median 1.6 KB), 2,170,983 cells (4,113
+  coastal-filled, 438 missing). 5-band Fishman Dynamic Chill Portions across
+  warming levels `+0 °C .. +4 °C` (ERA5-Land hourly 1991–2020); `photoperiod`
+  (FAO-56 day-length & solstice range, pole-hardened) is derived at 0 bytes.
+- `water_balance`: 417 tiles (7.65 MB, median 9.6 KB), 2,171,102 cells (4,357
+  coastal-filled, 319 missing). TerraClimate 1991–2020 CWD mean/P90 and summer
+  VPD + ERA5-Land 1991–2020 max consecutive dry days (CDD); Saxton–Rawls AWC
+  is derived at 0 bytes from `soil`.
+
+Sanity check across 8 contrasting cities (`phenology` chill trajectory and `water_balance`):
+
+| City | Chill Portions `+0 / +1 / +2 / +3 / +4 °C` | CWD mean / P90 (mm) | Max CDD (days) | Summer VPD (kPa) |
+|---|---|---|---|---|
+| Paris | `136 / 130 / 121 / 110 / 97` | 338 / 457 | 20 | 1.00 |
+| Lyon | `132 / 127 / 120 / 111 / 101` | 297 / 423 | 19 | 1.18 |
+| Seville | `62 / 47 / 33 / 21 / 12` | 946 / 1094 | 82 | 2.00 |
+| Davis, CA | `74 / 60 / 46 / 32 / 21` | 1021 / 1126 | 116 | 1.99 |
+| Canberra | `130 / 121 / 111 / 99 / 86` | 637 / 851 | 25 | 1.16 |
+| Oulu | `76 / 90 / 102 / 112 / 119` | 70 / 135 | 19 | 0.56 |
+| Mendoza | `117 / 108 / 99 / 88 / 77` | 1181 / 1330 | 28 | 1.89 |
+| Singapore | `0 / 0 / 0 / 0 / 0` | 29 / 91 | 10 | 0.74 |
+
+Note the expected Mediterranean/Central Valley chill collapse at Seville
+(62 → 12 CP) and Davis (74 → 21 CP), Southern Hemisphere winter alignment at
+Canberra and Mendoza, and boreal warming chill gain at Oulu (76 → 119 CP as
+sub-freezing winter days warm into the 4–10 °C Fishman sweet spot).
 
 ## Site layers
 
