@@ -64,12 +64,16 @@ pub enum Stage {
     Phenology,
     /// Layer: static TerraClimate CWD/VPD + ERA5-Land CDD water balance (after `tiles`).
     WaterBalance,
+    /// Site layer: SoilGrids 2.0 deep soil & physical properties (after `regions`).
+    SoilPlus,
+    /// Layer: static 0.1-degree elevation, relief, slope and HAND (after `tiles`).
+    Terrain,
     /// Compare the delta method with CHELSA's own projections.
     CheckFuture,
 }
 
 /// Stages run by default, in order.
-pub const DEFAULT_STAGES: [Stage; 16] = [
+pub const DEFAULT_STAGES: [Stage; 18] = [
     Stage::Verify,
     Stage::Koppen,
     Stage::Chelsa,
@@ -86,6 +90,8 @@ pub const DEFAULT_STAGES: [Stage; 16] = [
     Stage::Analogues,
     Stage::Phenology,
     Stage::WaterBalance,
+    Stage::SoilPlus,
+    Stage::Terrain,
 ];
 
 /// Build settings.
@@ -192,6 +198,12 @@ pub fn run(cfg: &BuildConfig, stages: &[Stage]) -> Result<()> {
             Stage::Analogues => super::analogues::stage_analogues(cfg)?,
             Stage::Phenology => super::phenology::run(cfg)?,
             Stage::WaterBalance => super::water_balance::run(cfg)?,
+            Stage::SoilPlus => {
+                let _ = super::soil_plus::run(cfg)?;
+            }
+            Stage::Terrain => {
+                let _ = super::terrain::run(cfg)?;
+            }
             Stage::CheckFuture => stage_check_future(cfg)?,
         }
         eprintln!(

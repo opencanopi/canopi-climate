@@ -32,6 +32,7 @@ pub mod koppen;
 pub mod layer;
 pub mod lookup;
 pub mod manifest;
+pub mod microclimate;
 pub mod model;
 pub mod monthly;
 pub mod monthly_precip;
@@ -39,7 +40,10 @@ pub mod phenology;
 pub mod raster;
 pub mod regions;
 pub mod soil;
+pub mod soil_plus;
+pub mod terrain;
 pub mod tile;
+pub mod trajectory;
 #[cfg(any(test, feature = "pipeline"))]
 pub mod vectors;
 pub mod water_balance;

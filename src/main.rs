@@ -152,6 +152,18 @@ enum Command {
         #[arg(long, default_value_t = 0.0)]
         exclude_radius_km: f64,
     },
+    /// Package a built grid into decoupled modular `.tar` layer packs plus
+    /// `packs-vX.Y.Z.json` (+ `.sha256`) under `format_version: 1`.
+    PackGrid {
+        /// Built grid directory (containing `manifest.json` and tile directories).
+        grid: PathBuf,
+        /// Output directory for pack `.tar` archives and `packs-vX.Y.Z.json`.
+        #[arg(long)]
+        out: PathBuf,
+        /// Release version string (e.g. `0.7.0`, defaults to crate version).
+        #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+        version: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -255,7 +267,19 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 exclude_radius_km,
             },
         ),
+        Command::PackGrid { grid, out, version } => pack_grid_cmd(&grid, &out, &version),
     }
+}
+
+fn pack_grid_cmd(grid: &Path, out: &Path, version: &str) -> Result<ExitCode> {
+    let index = canopi_climate::pipeline::packs::pack_grid(grid, out, version)?;
+    eprintln!(
+        "packed {} modular pack(s) into {} (manifest_sha256={})",
+        index.packs.len(),
+        out.display(),
+        index.manifest_sha256
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 fn build_grid_cmd(

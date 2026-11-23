@@ -322,6 +322,77 @@ pub fn soil_awc_js(sand_pct: f64, clay_pct: f64, om_pct: Option<f64>) -> Result<
     }
 }
 
+/// Decode a `soil_plus` tile (0.05-degree, 6 bands) and look a point up.
+/// Returns [`crate::soil_plus::SoilPlusLookup`] as a plain object, or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a `soil_plus` tile, the coordinate is invalid,
+/// or the point lies in another tile.
+#[wasm_bindgen(js_name = lookupSoilPlus)]
+pub fn lookup_soil_plus_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result<JsValue, JsError> {
+    let tile = crate::soil_plus::decode(tile_bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::soil_plus::lookup(&tile, lat, lon).map_err(|e| JsError::new(&e.to_string()))? {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Decode a `terrain` tile (0.1-degree, 4 bands) and read the cell holding
+/// (`cellLat`, `cellLon`): pass the climate lookup's `cell_lat` and `cell_lon`.
+/// Returns [`crate::terrain::TerrainLookup`] as a plain object, or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a `terrain` tile, the coordinate is invalid,
+/// or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupTerrain)]
+pub fn lookup_terrain_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::terrain::TerrainTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::terrain::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Adjust a 0.1-degree site climate (`SiteClimate`) to local topography
+/// (`MicroclimateInput`: `site_elev_m`, `slope_deg`, `aspect_deg`, `topo_position`).
+/// Returns [`crate::microclimate::MicroclimateAdjustment`] as a plain object.
+///
+/// # Errors
+/// Throws on deserialization failure or invalid non-finite topography inputs.
+#[wasm_bindgen(js_name = adjustMicroclimate)]
+pub fn adjust_microclimate_js(site: JsValue, input: JsValue) -> Result<JsValue, JsError> {
+    let s: crate::microclimate::SiteClimate =
+        serde_wasm_bindgen::from_value(site).map_err(|e| JsError::new(&e.to_string()))?;
+    let inp: crate::microclimate::MicroclimateInput =
+        serde_wasm_bindgen::from_value(input).map_err(|e| JsError::new(&e.to_string()))?;
+    let adjusted =
+        crate::microclimate::adjust(&s, &inp).map_err(|e| JsError::new(&e.to_string()))?;
+    to_js(&adjusted)
+}
+
+/// Evaluate a species' multi-decade ecological trajectory (`TrajectorySiteInput`,
+/// `SpeciesEnvelope`). Returns [`crate::trajectory::TrajectoryResult`] as a plain
+/// object (`periods`, `trajectory_class`, `establishment_vs_maturity_gap`, `has_gap`).
+///
+/// # Errors
+/// Throws on deserialization or serialization failure.
+#[wasm_bindgen(js_name = evaluateTrajectory)]
+pub fn evaluate_trajectory_js(site: JsValue, envelope: JsValue) -> Result<JsValue, JsError> {
+    let s: crate::trajectory::TrajectorySiteInput =
+        serde_wasm_bindgen::from_value(site).map_err(|e| JsError::new(&e.to_string()))?;
+    let env: crate::trajectory::SpeciesEnvelope =
+        serde_wasm_bindgen::from_value(envelope).map_err(|e| JsError::new(&e.to_string()))?;
+    let res = crate::trajectory::evaluate_trajectory(&s, &env);
+    to_js(&res)
+}
+
 /// Crate version, for logs and cache keys.
 #[wasm_bindgen(js_name = version)]
 #[must_use]

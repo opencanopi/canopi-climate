@@ -343,6 +343,43 @@ mod tests {
         );
     }
 
+    /// Synthetic v0.7.0 fixtures (`soil_plus` and `terrain`) are reproducible
+    /// (`CANOPI_REGEN_FIXTURES=1` rewrites them).
+    #[test]
+    fn committed_v07_fixtures_are_reproducible() {
+        let sp_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-soil-plus-n50e000.tif"
+        );
+        let sp_tile = crate::soil_plus::synthetic::soil_plus();
+        let sp_bytes =
+            write_raster_checked(sp_tile.as_raster(), &temp("soil-plus-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(sp_fixture, &sp_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(sp_fixture).unwrap(),
+            sp_bytes,
+            "soil_plus fixture drifted"
+        );
+
+        let tr_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-terrain-n50e000.tif"
+        );
+        let tr_tile = crate::terrain::synthetic::terrain();
+        let tr_bytes =
+            write_raster_checked(tr_tile.as_raster(), &temp("terrain-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(tr_fixture, &tr_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(tr_fixture).unwrap(),
+            tr_bytes,
+            "terrain fixture drifted"
+        );
+    }
+
     /// The committed fixture is what the writer produces today. Set
     /// `CANOPI_REGEN_FIXTURES=1` to rewrite it after a deliberate change.
     #[test]

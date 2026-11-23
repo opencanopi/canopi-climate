@@ -186,6 +186,65 @@ const awcSand = cc.soilAwc(100, 0, 0);
 assert.ok(awcSand.wilting_point >= 0.01);
 assert.equal(cc.soilAwc(70, 40, undefined), null);
 
+// v0.7.0: soil_plus, terrain, adjustMicroclimate, and evaluateTrajectory.
+const spBytes = fixture("synthetic-soil-plus-n50e000.tif");
+const sp = cc.lookupSoilPlus(spBytes, 45.25, 3.25);
+assert.equal(sp.tile, "n50e000");
+assert.equal(sp.soc_0_30_g_kg, 24.5);
+assert.equal(sp.bdod_0_30_g_cm3, 1.32);
+assert.equal(sp.cfvo_0_30_pct, 8);
+assert.equal(sp.ph_30_100, 7.4);
+assert.equal(sp.clay_30_100_pct, 28);
+assert.throws(() => cc.lookupSoilPlus(spBytes, 10, 10));
+
+const trBytes = fixture("synthetic-terrain-n50e000.tif");
+const tr = cc.lookupTerrain(trBytes, 45.95, 5.05);
+assert.equal(tr.tile, "n50e000");
+assert.equal(tr.elev_m, 210);
+assert.equal(tr.relief_m, 180);
+assert.equal(tr.slope_deg, 4.2);
+assert.equal(tr.hand_m, 12.5);
+const trLow = cc.lookupTerrain(trBytes, 49.95, 0.05);
+assert.equal(trLow.elev_m, -15);
+const trNoHand = cc.lookupTerrain(trBytes, 49.95, 9.95);
+assert.equal(trNoHand.hand_m, null);
+assert.throws(() => cc.lookupTerrain(trBytes, 10, 10));
+
+const mc = cc.adjustMicroclimate(
+  {
+    lat: 48.85,
+    tmean_cold_c: 4.5,
+    tmean_warm_c: 20.0,
+    tmin_cold_c: 2.0,
+    tmax_warm_c: 25.5,
+    tmin_extreme_c: -8.0,
+    tmax_extreme_c: 36.0,
+    cwd_mm: 250.0,
+    cell_terrain: { elev_m: 60.0, relief_m: 60.0 },
+  },
+  { site_elev_m: 4000.0, slope_deg: 20.0, aspect_deg: 180.0, topo_position: "frost_hollow" },
+);
+assert.equal(mc.elev_clamped, true);
+assert.equal(mc.effective_delta_elev_m, 150);
+assert.ok(mc.tmin_extreme_c < -13.0);
+assert.ok(mc.solar_ratio.annual > 1.05);
+
+const traj = cc.evaluateTrajectory(
+  {
+    today: { label: "1991-2020", tmin_extreme_c: -14.0, tmax_extreme_c: 35.0, cwd_mm: 220.0, chill_portions: 80.0 },
+    mid_century: { label: "2041-2070", tmin_extreme_c: -9.0, tmax_extreme_c: 38.0, cwd_mm: 300.0, chill_portions: 65.0 },
+    late_century: { label: "2071-2099", tmin_extreme_c: -7.0, tmax_extreme_c: 40.0, cwd_mm: 360.0, chill_portions: 50.0 },
+    ph_topsoil: 7.0,
+    ph_subsoil: 7.4,
+    hand_m: 12.0,
+    evaluated_layers: ["climate", "extremes", "phenology", "terrain"],
+  },
+  { min_tmin_extreme_c: -10.0, max_tmax_extreme_c: 45.0, max_cwd_mm: 700.0, min_chill_portions: 20.0 },
+);
+assert.equal(traj.trajectory_class, "improving");
+assert.equal(traj.establishment_vs_maturity_gap, "cold_establishment_barrier");
+assert.equal(traj.has_gap, true);
+
 // The synthetic vectors (tests/fixtures/synthetic-expected.json, written by the crate's own
 // lookups): every point a single-tile reader can answer gives exactly the native answer. The
 // host fetches the point's own tile only (none outside n50e000 here).

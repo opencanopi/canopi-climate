@@ -131,6 +131,37 @@ pub fn soil_awc(sand_pct: f64, clay_pct: f64, om_pct: Option<f64>) -> Option<Soi
     })
 }
 
+/// Saxton & Rawls (2006) AWC with optional coarse-fragment rock discounts
+/// (`cfvo_0_30_pct` for 0–30 cm topsoil and `cfvo_30_100_pct` for 30–100 cm
+/// subsoil, clamped to `0..=95%`).
+#[must_use]
+pub fn soil_awc_with_rock(
+    sand_pct: f64,
+    clay_pct: f64,
+    om_pct: Option<f64>,
+    cfvo_0_30_pct: Option<f64>,
+    cfvo_30_100_pct: Option<f64>,
+) -> Option<SoilAwc> {
+    let base = soil_awc(sand_pct, clay_pct, om_pct)?;
+    let rock = |v: Option<f64>| -> Option<f64> {
+        let x = v.unwrap_or(0.0);
+        (x.is_finite() && (0.0..=100.0).contains(&x)).then(|| 1.0 - x.clamp(0.0, 95.0) / 100.0)
+    };
+    let f_top = rock(cfvo_0_30_pct)?;
+    let f_sub = rock(cfvo_30_100_pct.or(cfvo_0_30_pct))?;
+    let round1 = |x: f64| (x * 10.0).round() / 10.0;
+    let awc_30 = base.awc_30cm_mm * f_top;
+    let awc_70 = (base.awc_mm_per_m * 0.7) * f_sub;
+    let awc_100 = awc_30 + awc_70;
+    Some(SoilAwc {
+        field_capacity: base.field_capacity,
+        wilting_point: base.wilting_point,
+        awc_mm_per_m: round1(awc_100),
+        awc_30cm_mm: round1(awc_30),
+        awc_100cm_mm: round1(awc_100),
+    })
+}
+
 /// USDA soil texture classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
