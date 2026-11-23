@@ -158,6 +158,7 @@ pub fn register(out: &Path, layer: LayerSpec, report: Value) -> Result<()> {
     m.format_version = crate::manifest::FORMAT_VERSION;
     m.builder_version = env!("CARGO_PKG_VERSION").into();
     m.dry_month_rule = Some(crate::manifest::DRY_MONTH_RULE.into());
+    m.climate_tiles_sha256 = Some(super::assemble::climate_tiles_sha256(&m.tiles));
     let id = layer.id.clone();
     m.layers.retain(|l| l.id != id);
     m.layers.push(layer);
@@ -211,6 +212,9 @@ pub fn carry_over(out: &Path, m: &mut Manifest, report: &mut Value) -> Result<()
         return Ok(());
     }
     let old = read_manifest(out)?;
+    if m.analogues.is_none() {
+        m.analogues = old.analogues;
+    }
     if old.layers.is_empty() {
         return Ok(());
     }

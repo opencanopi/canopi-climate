@@ -5,7 +5,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::{PipelineError, Result};
+use crate::analogues::AnalogueIndex;
 use crate::extremes::{ExtremesLookup, ExtremesTile};
+use crate::extremes_tail::{ExtremesTailLookup, ExtremesTailTile};
+use crate::frost_calendar::{FrostCalendarLookup, FrostCalendarTile};
 use crate::grid::TileId;
 use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
 use crate::lookup::{Lookup, lookup_across, search_tiles};
@@ -15,7 +18,10 @@ use crate::monthly_precip::{MonthlyPrecipLookup, MonthlyPrecipTile, PRECIP_LOOKU
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
 use crate::tile::Tile;
-use crate::vectors::{ExtremesTiles, Getters, LayerTiles, MonthlyPrecipTiles, MonthlyTiles, Site};
+use crate::vectors::{
+    ExtremesTailTiles, ExtremesTiles, FrostCalendarTiles, Getters, LayerTiles, MonthlyPrecipTiles,
+    MonthlyTiles, Site,
+};
 
 /// Decoded tiles kept in memory at most (about 1.4 MB each).
 const CACHE_TILES: usize = 96;
@@ -34,6 +40,8 @@ pub struct Grid {
     layer_paths: HashMap<(String, String), String>,
     layer_cache: HashMap<(String, TileId), LayerTile>,
     extremes_cache: HashMap<TileId, ExtremesTile>,
+    extremes_tail_cache: HashMap<TileId, ExtremesTailTile>,
+    frost_calendar_cache: HashMap<TileId, FrostCalendarTile>,
     monthly_cache: HashMap<TileId, MonthlyTile>,
     monthly_precip_cache: HashMap<TileId, MonthlyPrecipTile>,
 }
@@ -78,6 +86,8 @@ impl Grid {
             layer_paths,
             layer_cache: HashMap::new(),
             extremes_cache: HashMap::new(),
+            extremes_tail_cache: HashMap::new(),
+            frost_calendar_cache: HashMap::new(),
             monthly_cache: HashMap::new(),
             monthly_precip_cache: HashMap::new(),
         })
@@ -159,6 +169,14 @@ impl Grid {
         if extremes {
             self.load_extremes(lat, lon, radius)?;
         }
+        let extremes_tail = self.has_layer(crate::extremes_tail::DIR);
+        if extremes_tail {
+            self.load_extremes_tail(lat, lon, radius)?;
+        }
+        let frost_calendar = self.has_layer(crate::frost_calendar::DIR);
+        if frost_calendar {
+            self.load_frost_calendar(lat, lon, radius)?;
+        }
         let monthly = self.has_layer(crate::monthly::DIR);
         if monthly {
             self.load_monthly(lat, lon, radius)?;
@@ -167,10 +185,12 @@ impl Grid {
         if monthly_precip {
             self.load_monthly_precip(lat, lon, PRECIP_LOOKUP_RADIUS)?;
         }
-        let (cache, layers, ext, mon, mon_p) = (
+        let (cache, layers, ext, ext_tail, frost, mon, mon_p) = (
             &self.cache,
             &self.layer_cache,
             &self.extremes_cache,
+            &self.extremes_tail_cache,
+            &self.frost_calendar_cache,
             &self.monthly_cache,
             &self.monthly_precip_cache,
         );
@@ -178,6 +198,8 @@ impl Grid {
         let soil_tiles = |id: TileId| layers.get(&("soil".to_string(), id));
         let region_tiles = |id: TileId| layers.get(&("regions".to_string(), id));
         let extremes_tiles = |id: TileId| ext.get(&id);
+        let extremes_tail_tiles = |id: TileId| ext_tail.get(&id);
+        let frost_calendar_tiles = |id: TileId| frost.get(&id);
         let monthly_tiles = |id: TileId| mon.get(&id);
         let monthly_precip_tiles = |id: TileId| mon_p.get(&id);
         let g = Getters {
@@ -185,6 +207,10 @@ impl Grid {
             soil: soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
             regions: regions.then_some(&region_tiles as LayerTiles<'_, '_>),
             extremes: extremes.then_some(&extremes_tiles as ExtremesTiles<'_, '_>),
+            extremes_tail: extremes_tail
+                .then_some(&extremes_tail_tiles as ExtremesTailTiles<'_, '_>),
+            frost_calendar: frost_calendar
+                .then_some(&frost_calendar_tiles as FrostCalendarTiles<'_, '_>),
             monthly: monthly.then_some(&monthly_tiles as MonthlyTiles<'_, '_>),
             monthly_precip: monthly_precip
                 .then_some(&monthly_precip_tiles as MonthlyPrecipTiles<'_, '_>),
@@ -220,6 +246,66 @@ impl Grid {
                 )));
             }
             self.extremes_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    /// Decode the `extremes_tail` tiles the climate search can reach.
+    fn load_extremes_tail(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.extremes_tail_cache.len() + ids.len() > CACHE_TILES {
+            self.extremes_tail_cache.clear();
+        }
+        for t in ids {
+            if self.extremes_tail_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::extremes_tail::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = ExtremesTailTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.extremes_tail_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    /// Decode the `frost_calendar` tiles the climate search can reach.
+    fn load_frost_calendar(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.frost_calendar_cache.len() + ids.len() > CACHE_TILES {
+            self.frost_calendar_cache.clear();
+        }
+        for t in ids {
+            if self.frost_calendar_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::frost_calendar::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = FrostCalendarTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.frost_calendar_cache.insert(t, tile);
         }
         Ok(())
     }
@@ -447,6 +533,10 @@ impl Grid {
         let layer_tiles = self.manifest.layers.iter().flat_map(|l| {
             let kind = if l.id == crate::extremes::DIR {
                 Kind::Extremes
+            } else if l.id == crate::extremes_tail::DIR {
+                Kind::ExtremesTail
+            } else if l.id == crate::frost_calendar::DIR {
+                Kind::FrostCalendar
             } else if l.id == crate::monthly::DIR {
                 Kind::Monthly
             } else if l.id == crate::monthly_precip::DIR {
@@ -479,7 +569,85 @@ impl Grid {
                 }
             }
         }
+        if let Some(a) = &self.manifest.analogues {
+            let p = self.dir.join(&a.path);
+            match std::fs::read(&p) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    problems.push(format!("missing {}", a.path));
+                }
+                Err(e) => return Err(PipelineError::io(&p, e)),
+                Ok(b) if b.len() as u64 != a.bytes => {
+                    problems.push(format!(
+                        "{}: {} bytes, expected {}",
+                        a.path,
+                        b.len(),
+                        a.bytes
+                    ));
+                }
+                Ok(b) if super::sha256_bytes(&b) != a.sha256 => {
+                    problems.push(format!("{}: checksum mismatch", a.path));
+                }
+                Ok(b) => match AnalogueIndex::from_bytes(&b) {
+                    Err(e) => problems.push(format!("{}: {e}", a.path)),
+                    Ok(idx) if idx.records.len() != a.records as usize => {
+                        problems.push(format!(
+                            "{}: {} records, expected {}",
+                            a.path,
+                            idx.records.len(),
+                            a.records
+                        ));
+                    }
+                    Ok(_) => {}
+                },
+            }
+        }
         Ok(problems)
+    }
+
+    /// Tail extremes at a climate cell (`cell_lat`, `cell_lon`).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn extremes_tail_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<ExtremesTailLookup>> {
+        if !self.has_layer(crate::extremes_tail::DIR) {
+            return Ok(None);
+        }
+        self.load_extremes_tail(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.extremes_tail_cache.get(&id) {
+            Some(tile) => crate::extremes_tail::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Frost calendar at a climate cell (`cell_lat`, `cell_lon`).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn frost_calendar_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<FrostCalendarLookup>> {
+        if !self.has_layer(crate::frost_calendar::DIR) {
+            return Ok(None);
+        }
+        self.load_frost_calendar(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.frost_calendar_cache.get(&id) {
+            Some(tile) => crate::frost_calendar::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
     }
 }
 
@@ -490,6 +658,8 @@ enum Kind {
     /// A 0.05-degree site layer with this many bands.
     Layer(usize),
     Extremes,
+    ExtremesTail,
+    FrostCalendar,
     Monthly,
     MonthlyPrecip,
 }
@@ -500,6 +670,8 @@ fn decode_problem(bytes: &[u8], kind: Kind, name: &str) -> Option<String> {
         Kind::Climate => Tile::decode(bytes).map(|t| t.id()),
         Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| t.id()),
         Kind::Extremes => ExtremesTile::decode(bytes).map(|t| t.id()),
+        Kind::ExtremesTail => ExtremesTailTile::decode(bytes).map(|t| t.id()),
+        Kind::FrostCalendar => FrostCalendarTile::decode(bytes).map(|t| t.id()),
         Kind::Monthly => MonthlyTile::decode(bytes).map(|t| t.id()),
         Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes).map(|t| t.id()),
     };

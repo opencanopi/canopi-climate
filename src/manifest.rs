@@ -39,9 +39,31 @@ pub struct Manifest {
     /// Identifier of the dry-month rule (`gaussen_p_lt_2t`; optional for older manifests).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_month_rule: Option<String>,
+    /// Canonical SHA-256 of the base climate `tiles[]` entries (optional, added in 0.5.0).
+    /// Stays invariant when additive layers are added to the same climate tiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub climate_tiles_sha256: Option<String>,
+    /// Optional binary k-NN index for 2050 Climate Twin analogue lookup (`analogues.bin`, 0.5.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analogues: Option<AnaloguesAssetSpec>,
     /// Optional layers, each with its own grid and tiles (absent before 0.2.0; optional).
     #[serde(default)]
     pub layers: Vec<LayerSpec>,
+}
+
+/// Metadata for the `analogues.bin` binary k-NN index asset in a release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnaloguesAssetSpec {
+    /// File path relative to the manifest, e.g. `analogues.bin`.
+    pub path: String,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// SHA-256 of the file (hex).
+    pub sha256: String,
+    /// Crate version that built the index.
+    pub version: String,
+    /// Number of historical reference land records in the index.
+    pub records: u32,
 }
 
 /// An optional layer: its own tiles, in the climate grid's 10-degree tiles

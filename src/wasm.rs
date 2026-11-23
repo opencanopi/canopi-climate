@@ -175,6 +175,78 @@ pub fn lookup_monthly_precip_js(tile_bytes: &[u8], lat: f64, lon: f64) -> Result
     }
 }
 
+/// Decode an `extremes_tail` tile and read the cell holding (`cellLat`, `cellLon`):
+/// pass the climate lookup's `cell_lat` and `cell_lon`. Returns the
+/// [`crate::extremes_tail::ExtremesTailLookup`] as a plain object, or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not an extremes_tail tile, the coordinate is
+/// invalid or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupExtremesTail)]
+pub fn lookup_extremes_tail_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::extremes_tail::ExtremesTailTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::extremes_tail::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Decode a `frost_calendar` tile and read the cell holding (`cellLat`, `cellLon`):
+/// pass the climate lookup's `cell_lat` and `cell_lon`. Returns the
+/// [`crate::frost_calendar::FrostCalendarLookup`] as a plain object, or `null`.
+///
+/// # Errors
+/// Throws when the bytes are not a frost_calendar tile, the coordinate is
+/// invalid or the cell lies in another tile.
+#[wasm_bindgen(js_name = lookupFrostCalendar)]
+pub fn lookup_frost_calendar_js(
+    tile_bytes: &[u8],
+    cell_lat: f64,
+    cell_lon: f64,
+) -> Result<JsValue, JsError> {
+    let tile = crate::frost_calendar::FrostCalendarTile::decode(tile_bytes)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    match crate::frost_calendar::at_cell(&tile, cell_lat, cell_lon)
+        .map_err(|e| JsError::new(&e.to_string()))?
+    {
+        Some(found) => to_js(&found),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Search an `analogues.bin` binary index for the closest historical
+/// (1991–2020) climate twins matching `query` (`AnalogueQuery`) with optional
+/// `options` (`SearchOptions`). Returns an [`crate::analogues::AnalogueResult`]
+/// plain object (`novel_climate`, `best_sigma`, `matches[]`).
+///
+/// # Errors
+/// Throws when `indexBytes` is not a valid `analogues.bin` buffer or when
+/// `query`/`options` cannot be deserialized.
+#[wasm_bindgen(js_name = findAnalogues)]
+pub fn find_analogues_js(
+    index_bytes: &[u8],
+    query: JsValue,
+    options: JsValue,
+) -> Result<JsValue, JsError> {
+    let q: crate::analogues::AnalogueQuery =
+        serde_wasm_bindgen::from_value(query).map_err(|e| JsError::new(&e.to_string()))?;
+    let opts: crate::analogues::SearchOptions = if options.is_null() || options.is_undefined() {
+        crate::analogues::SearchOptions::default()
+    } else {
+        serde_wasm_bindgen::from_value(options).map_err(|e| JsError::new(&e.to_string()))?
+    };
+    let result = crate::analogues::AnalogueIndex::search_bytes(index_bytes, &q, &opts)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    to_js(&result)
+}
+
 /// Crate version, for logs and cache keys.
 #[wasm_bindgen(js_name = version)]
 #[must_use]

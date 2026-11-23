@@ -433,12 +433,29 @@ pub fn write_release_files(out: &Path, m: &Manifest) -> Result<()> {
     write_sums(out, m)
 }
 
-/// `SHA256SUMS` over the manifest, the report, the attribution and every
-/// tile, the site layers' included.
+/// Canonical SHA-256 of the base climate `tiles[]` entries (docs/format.md).
+/// Stays invariant when additive layers are added to the same climate tiles.
+#[must_use]
+pub fn climate_tiles_sha256(tiles: &[TileSpec]) -> String {
+    let mut sorted: Vec<&TileSpec> = tiles.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut buf = String::from("canopi-climate-tiles-v1\n");
+    for t in sorted {
+        use std::fmt::Write;
+        let _ = writeln!(buf, "{} {} {}", t.name, t.bytes, t.sha256);
+    }
+    super::sha256_bytes(buf.as_bytes())
+}
+
+/// `SHA256SUMS` over the manifest, the report, the attribution, `analogues.bin`
+/// (when present) and every tile, the site layers' included.
 fn write_sums(out: &Path, m: &Manifest) -> Result<()> {
     let mut lines = Vec::new();
     for name in SUMMED {
         lines.push(format!("{}  {name}", sha256_file(&out.join(name))?));
+    }
+    if let Some(a) = &m.analogues {
+        lines.push(format!("{}  {}", a.sha256, a.path));
     }
     let layer_tiles = m.layers.iter().flat_map(|l| l.tiles.iter());
     for t in m.tiles.iter().chain(layer_tiles) {
@@ -549,9 +566,11 @@ pub fn manifest(tiles: Vec<TileSpec>) -> Manifest {
             })
             .collect(),
         sources: sources::manifest_sources("climate"),
+        climate_tiles_sha256: Some(climate_tiles_sha256(&tiles)),
         tiles,
         notes: notes(),
         dry_month_rule: Some(manifest::DRY_MONTH_RULE.into()),
+        analogues: None,
         layers: Vec::new(),
     }
 }
@@ -617,6 +636,30 @@ mod tests {
         assert!(m.sources.iter().any(|s| s.id == "beck2023"));
         assert!(m.sources.iter().all(|s| s.id != "chelsa-v2.1-future-check"));
         assert!(m.notes.iter().any(|n| n.contains("USDA")));
+        assert!(m.climate_tiles_sha256.is_some());
+    }
+
+    #[test]
+    fn climate_tiles_sha256_is_order_independent_and_sensitive() {
+        let a = TileSpec {
+            name: "n50e000".into(),
+            path: "tiles/n50e000.tif".into(),
+            bytes: 100,
+            sha256: "aaa".into(),
+            complete_cells: 10,
+        };
+        let b = TileSpec {
+            name: "n40e000".into(),
+            path: "tiles/n40e000.tif".into(),
+            bytes: 200,
+            sha256: "bbb".into(),
+            complete_cells: 20,
+        };
+        let h1 = climate_tiles_sha256(&[a.clone(), b.clone()]);
+        let h2 = climate_tiles_sha256(&[b, a.clone()]);
+        assert_eq!(h1, h2);
+        let h3 = climate_tiles_sha256(&[a]);
+        assert_ne!(h1, h3);
     }
 
     #[test]

@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 use crate::derived::{MonthlySummary, chill_months, dry_month_mask, gdd_base_10};
 use crate::extremes::{self, ExtremesLookup, ExtremesTile};
+use crate::extremes_tail::{self, ExtremesTailLookup, ExtremesTailTile};
+use crate::frost_calendar::{self, FrostCalendarLookup, FrostCalendarTile};
 use crate::grid::TileId;
 use crate::koppen;
 use crate::layer::{LAYER_LOOKUP_RADIUS, LayerTile};
@@ -38,6 +40,10 @@ pub type ExtremesTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a ExtremesTile>;
 pub type MonthlyTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a MonthlyTile>;
 /// A monthly_precip tile getter: the decoded tile, or `None` (no file).
 pub type MonthlyPrecipTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a MonthlyPrecipTile>;
+/// An `extremes_tail` tile getter: the decoded tile, or `None` (no file).
+pub type ExtremesTailTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a ExtremesTailTile>;
+/// A `frost_calendar` tile getter: the decoded tile, or `None` (no file).
+pub type FrostCalendarTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a FrostCalendarTile>;
 
 /// The tile getters of a grid: climate, and each layer (`None`: the grid
 /// has no such layer).
@@ -55,6 +61,10 @@ pub struct Getters<'a, 'b> {
     pub monthly: Option<MonthlyTiles<'a, 'b>>,
     /// Monthly precipitation tiles (0.25-degree grid).
     pub monthly_precip: Option<MonthlyPrecipTiles<'a, 'b>>,
+    /// Tail extremes tiles (0.1-degree static).
+    pub extremes_tail: Option<ExtremesTailTiles<'a, 'b>>,
+    /// Frost calendar tiles (0.1-degree static).
+    pub frost_calendar: Option<FrostCalendarTiles<'a, 'b>>,
 }
 
 /// What a reader answers at a point (the CLI's `lookup` JSON).
@@ -75,11 +85,14 @@ pub struct Site {
     /// Monthly precipitation on the 0.25-degree grid (with radius-1 coastal
     /// fallback), `None` without the layer or with no cell near.
     pub monthly_precip: Option<MonthlyPrecipLookup>,
+    /// Static 1-in-10-year tail offsets, heat days >= 35 C and recent warming trend.
+    pub extremes_tail: Option<ExtremesTailLookup>,
+    /// Static hemisphere-aware frost calendar and false-spring risk.
+    pub frost_calendar: Option<FrostCalendarLookup>,
 }
 
 impl Site {
-    /// `{"climate": …, "extremes": …, "monthly": …, "monthly_precip": …, "regions": …, "soil": …}`
-    /// (keys sorted), as printed by `canopi-climate lookup`.
+    /// JSON object of all site layers (keys sorted), as printed by `canopi-climate lookup`.
     #[must_use]
     pub fn json(&self) -> Value {
         json!({
@@ -87,6 +100,8 @@ impl Site {
             "soil": self.soil,
             "regions": self.regions,
             "extremes": self.extremes,
+            "extremes_tail": self.extremes_tail,
+            "frost_calendar": self.frost_calendar,
             "monthly": self.monthly,
             "monthly_precip": self.monthly_precip,
         })
@@ -122,6 +137,8 @@ impl Site {
         self.climate == other.climate
             && self.soil == other.soil
             && self.extremes == other.extremes
+            && self.extremes_tail == other.extremes_tail
+            && self.frost_calendar == other.frost_calendar
             && self.monthly == other.monthly
             && self.monthly_precip == other.monthly_precip
             && codes(self) == codes(other)
@@ -130,8 +147,8 @@ impl Site {
 
 /// Answer a point from decoded tiles. With `own_tile_only`, every getter is
 /// limited to the point's own tile: the answer of a reader that fetched
-/// that tile only. The extremes and monthly layers are read at the climate
-/// lookup's cell, in that cell's tile.
+/// that tile only. The extremes, extremes_tail, frost_calendar and monthly
+/// layers are read at the climate lookup's cell, in that cell's tile.
 ///
 /// # Errors
 /// [`LookupError::InvalidCoordinate`].
@@ -147,6 +164,8 @@ pub fn site(
         extremes: ext,
         monthly: mon,
         monthly_precip: mon_p,
+        extremes_tail: tail,
+        frost_calendar: frost,
     } = g;
     let own = TileId::of(lat, lon).ok_or(LookupError::InvalidCoordinate)?;
     let keep = |id: TileId| !own_tile_only || id == own;
@@ -156,6 +175,24 @@ pub fn site(
         (Some(get), Some(c)) => {
             match TileId::parse(&c.tile).and_then(|id| get(id).filter(|_| keep(id))) {
                 Some(t) => extremes::at_cell(t, c.cell_lat, c.cell_lon)?,
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let extremes_tail = match (tail, &climate) {
+        (Some(get), Some(c)) => {
+            match TileId::parse(&c.tile).and_then(|id| get(id).filter(|_| keep(id))) {
+                Some(t) => extremes_tail::at_cell(t, c.cell_lat, c.cell_lon)?,
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let frost_calendar = match (frost, &climate) {
+        (Some(get), Some(c)) => {
+            match TileId::parse(&c.tile).and_then(|id| get(id).filter(|_| keep(id))) {
+                Some(t) => frost_calendar::at_cell(t, c.cell_lat, c.cell_lon)?,
                 None => None,
             }
         }
@@ -198,6 +235,8 @@ pub fn site(
         extremes,
         monthly,
         monthly_precip,
+        extremes_tail,
+        frost_calendar,
     })
 }
 
@@ -675,12 +714,16 @@ mod tests {
         let t = synthetic::tile(TileId::parse("n50e000").unwrap());
         let (soil, regions) = (layers::soil(), layers::regions());
         let ext = crate::extremes::synthetic::extremes();
+        let ext_tail = crate::extremes_tail::synthetic::extremes_tail();
+        let frost = crate::frost_calendar::synthetic::frost_calendar();
         let mon = crate::monthly::synthetic::monthly();
         let mon_p = crate::monthly_precip::synthetic::monthly_precip();
         let ct = |id: TileId| (id == t.id()).then_some(&t);
         let st = |id: TileId| (id == soil.id()).then_some(&soil);
         let rt = |id: TileId| (id == regions.id()).then_some(&regions);
         let et = |id: TileId| (id == ext.id()).then_some(&ext);
+        let ett = |id: TileId| (id == ext_tail.id()).then_some(&ext_tail);
+        let ft = |id: TileId| (id == frost.id()).then_some(&frost);
         let mt = |id: TileId| (id == mon.id()).then_some(&mon);
         let mpt = |id: TileId| (id == mon_p.id()).then_some(&mon_p);
         let g = Getters {
@@ -690,6 +733,8 @@ mod tests {
             extremes: Some(&et),
             monthly: Some(&mt),
             monthly_precip: Some(&mpt),
+            extremes_tail: Some(&ett),
+            frost_calendar: Some(&ft),
         };
         let points: Vec<Value> = points()
             .iter()
@@ -698,6 +743,8 @@ mod tests {
         let tiles = json!({
             "climate": "tests/fixtures/synthetic-n50e000.tif",
             "extremes": "tests/fixtures/synthetic-extremes-n50e000.tif",
+            "extremes_tail": "tests/fixtures/synthetic-extremes-tail-n50e000.tif",
+            "frost_calendar": "tests/fixtures/synthetic-frost-calendar-n50e000.tif",
             "monthly": "tests/fixtures/synthetic-monthly-n50e000.tif",
             "monthly_precip": "tests/fixtures/synthetic-monthly-precip-n50e000.tif",
             "soil": "tests/fixtures/synthetic-soil-n50e000.tif",

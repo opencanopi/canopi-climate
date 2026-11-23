@@ -31,7 +31,7 @@ A grid release is one tar (`canopi-climate-grid-vX.Y.Z.tar`) holding:
 | `analogues.bin` | Compact binary k-NN index of historical 1991–2020 land cells for 2050 Climate Twin lookup (since 0.5.0). |
 | `ATTRIBUTION.md` | Sources, licences, citations. |
 | `build-report.json` | The build's checks and counts (land cells, class/means contradictions, clamped extremes, source comparisons; `layers`: soil fill by distance, region codes). Informative: a reader does not need it. |
-| `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md` and every tile. |
+| `SHA256SUMS` | `sha256sum` lines for `manifest.json`, `build-report.json`, `ATTRIBUTION.md`, `analogues.bin` (when present) and every tile. |
 
 A tile with no data is absent, not empty. A reader MUST treat an absent tile (listed nowhere in the
 manifest) as "no data here", not as an error.
@@ -381,9 +381,9 @@ cell's thermal-winter DOY (`winter_doy`, opposite the warmest month) with leap d
 
 | # | Band id | Unit | Scale | Range & sentinels (`NODATA = -32768`) | Content |
 |---|---|---|---|---|---|
-| 0 | `last_spring_frost_doy` | doy | 1 | `1..=365`, `0` = frost-free, `366` = year-round frost | conditional median last spring frost (`Tmin <= 0 °C`) |
-| 1 | `last_spring_frost_p90_doy` | doy | 1 | `1..=365`, `0` = frost-free, `366` = year-round frost | conditional 90th-percentile (1-in-10 late) last spring frost |
-| 2 | `first_autumn_frost_doy` | doy | 1 | `1..=365`, `0` = frost-free, `366` = year-round frost | conditional median first autumn frost (`Tmin <= 0 °C`) |
+| 0 | `last_spring_frost_doy` | doy | 1 | `1..=365`, `0` = frost-free (or no spring frost), `366` = year-round frost | conditional median last spring frost (`Tmin <= 0 °C`) |
+| 1 | `last_spring_frost_p90_doy` | doy | 1 | `1..=365`, `0` = frost-free (or no spring frost), `366` = year-round frost | conditional 90th-percentile (1-in-10 late) last spring frost |
+| 2 | `first_autumn_frost_doy` | doy | 1 | `1..=365`, `0` = frost-free (or no autumn frost), `366` = year-round frost | conditional median first autumn frost (`Tmin <= 0 °C`) |
 | 3 | `frost_free_days` | days | 1 | `0..=365` (`365` = frost-free, `0` = year-round frost) | unconditional median frost-free season length |
 | 4 | `frost_year_pct` | % | 1 | `0..=100` | percentage of years with at least one day `Tmin <= 0 °C` |
 | 5 | `false_spring_pct` | % | 1 | `0..=100` (`0` when frost-free or GDD < 150) | percentage of years with `Tmin <= -2 °C` after `>= 150` GDD (base 5 °C) from `winter_doy` |

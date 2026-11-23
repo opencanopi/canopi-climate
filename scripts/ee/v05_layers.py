@@ -181,7 +181,7 @@ def frost_calendar_image() -> ee.Image:
         first_autumn_fy = tagged.select("autumn_fy").min()  # masked if no autumn frost
         has_frost = tagged.select("has_frost").max().unmask(0).updateMask(land_mask).rename("has_frost")
 
-        ff_start = last_spring_fy.unmask(0)
+        ff_start = last_spring_fy.add(1).unmask(0)
         ff_end = first_autumn_fy.unmask(365)
         ff_days = ff_end.subtract(ff_start).max(0).min(365).updateMask(land_mask).toInt16().rename("ff_days")
 

@@ -127,6 +127,31 @@ enum Command {
         /// Grid directory.
         grid: PathBuf,
     },
+    /// Find historical (1991-2020) climate twins matching a point's climate in
+    /// the given slot (default: 2041-2070 ssp245) using `analogues.bin`.
+    Analogues {
+        /// Latitude (degrees north).
+        #[arg(allow_hyphen_values = true)]
+        lat: f64,
+        /// Longitude (degrees east).
+        #[arg(allow_hyphen_values = true)]
+        lon: f64,
+        /// Grid directory containing `analogues.bin`.
+        #[arg(long)]
+        grid: PathBuf,
+        /// Climate slot index (0 = 1991-2020, 2 = 2041-2070 ssp245, 6 = 2071-2099 ssp245).
+        #[arg(long, default_value_t = 2)]
+        slot: usize,
+        /// Number of spatially deduplicated twins to return.
+        #[arg(long, default_value_t = 5)]
+        k: usize,
+        /// Minimum Haversine separation between returned twins (km).
+        #[arg(long, default_value_t = 100.0)]
+        min_distance_km: f64,
+        /// Exclude historical twins closer than this distance to the query point (km).
+        #[arg(long, default_value_t = 0.0)]
+        exclude_radius_km: f64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -149,29 +174,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             beck_only,
             force,
             skip_verify,
-        } => {
-            let work = work.unwrap_or_else(|| {
-                let name = out
-                    .file_name()
-                    .map_or_else(|| "grid".into(), |n| n.to_string_lossy().into_owned());
-                out.with_file_name(format!("work-{name}"))
-            });
-            let cfg = BuildConfig {
-                sources,
-                out,
-                work,
-                force,
-                skip_verify,
-                beck_only,
-            };
-            let stages = if stages.is_empty() {
-                build::DEFAULT_STAGES.to_vec()
-            } else {
-                stages
-            };
-            build::run(&cfg, &stages)?;
-            Ok(ExitCode::SUCCESS)
-        }
+        } => build_grid_cmd(sources, out, work, stages, beck_only, force, skip_verify),
         Command::Sources { verify } => list_sources(verify),
         Command::Sample {
             points,
@@ -233,7 +236,113 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 ExitCode::FAILURE
             })
         }
+        Command::Analogues {
+            lat,
+            lon,
+            grid,
+            slot,
+            k,
+            min_distance_km,
+            exclude_radius_km,
+        } => analogues_cmd(
+            lat,
+            lon,
+            &grid,
+            slot,
+            canopi_climate::analogues::SearchOptions {
+                k,
+                min_distance_km,
+                exclude_radius_km,
+            },
+        ),
     }
+}
+
+fn build_grid_cmd(
+    sources: PathBuf,
+    out: PathBuf,
+    work: Option<PathBuf>,
+    stages: Vec<Stage>,
+    beck_only: Vec<String>,
+    force: bool,
+    skip_verify: bool,
+) -> Result<ExitCode> {
+    let work = work.unwrap_or_else(|| {
+        let name = out
+            .file_name()
+            .map_or_else(|| "grid".into(), |n| n.to_string_lossy().into_owned());
+        out.with_file_name(format!("work-{name}"))
+    });
+    let cfg = BuildConfig {
+        sources,
+        out,
+        work,
+        force,
+        skip_verify,
+        beck_only,
+    };
+    let stages = if stages.is_empty() {
+        build::DEFAULT_STAGES.to_vec()
+    } else {
+        stages
+    };
+    build::run(&cfg, &stages)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn analogues_cmd(
+    lat: f64,
+    lon: f64,
+    grid: &Path,
+    slot: usize,
+    opts: canopi_climate::analogues::SearchOptions,
+) -> Result<ExitCode> {
+    let mut g = Grid::open(grid)?;
+    let site = g.site(lat, lon, DEFAULT_RADIUS, false)?;
+    let Some(climate) = site.climate else {
+        eprintln!("no climate data near ({lat}, {lon})");
+        return Ok(ExitCode::from(2));
+    };
+    let Some(period) = climate.periods.get(slot) else {
+        return Err(PipelineError::Data(format!(
+            "slot {slot} out of range (0..{})",
+            climate.periods.len()
+        )));
+    };
+    let srf = match (&site.monthly, &site.monthly_precip) {
+        (Some(m), Some(p)) => {
+            let m_slot = canopi_climate::monthly::MONTHLY_SLOT_INDICES
+                .iter()
+                .position(|&idx| idx == slot)
+                .unwrap_or(0);
+            f64::from(canopi_climate::pipeline::analogues::summer_rain_fraction(
+                &m.periods[m_slot].tmean_c,
+                &p.periods[m_slot].precip_mm,
+            ))
+        }
+        _ => 0.5,
+    };
+    let query = canopi_climate::analogues::AnalogueQuery {
+        lat,
+        lon,
+        tmean_cold_c: period.tmean_cold_c,
+        tmean_warm_c: period.tmean_warm_c,
+        tmin_cold_c: period.tmin_cold_c,
+        tmax_warm_c: period.tmax_warm_c,
+        precip_mm: period.precip_mm,
+        aridity_index: period.aridity_index,
+        dry_months: period.dry_months,
+        summer_rain_frac: srf,
+    };
+    let bin_path = grid.join(canopi_climate::analogues::FILE_NAME);
+    let bytes = std::fs::read(&bin_path).map_err(|e| PipelineError::io(&bin_path, e))?;
+    let index = canopi_climate::analogues::AnalogueIndex::from_bytes(&bytes)
+        .map_err(|e| PipelineError::Data(e.to_string()))?;
+    let res = index.search(&query, &opts);
+    let text =
+        serde_json::to_string_pretty(&res).map_err(|e| PipelineError::Data(e.to_string()))?;
+    println!("{text}");
+    Ok(ExitCode::SUCCESS)
 }
 
 fn vectors_cmd(

@@ -65,7 +65,7 @@
   winter, `182` = midsummer):
   - Spring is `0 <= fy_doy < 182`; `last_spring_fy = max(fy_doy)` of days with `Tmin <= 0 °C`.
   - Autumn is `182 <= fy_doy < 365`; `first_autumn_fy = min(fy_doy)` of days with `Tmin <= 0 °C`.
-  - `frost_free_days = clamp(first_autumn_fy.unwrap_or(365) - last_spring_fy.unwrap_or(0), 0, 365)`.
+  - `frost_free_days = clamp(first_autumn_fy.unwrap_or(365) - last_spring_fy.map(|s| s + 1).unwrap_or(0), 0, 365)` (so `s = 181, a = 182` gives `0` and triggers sentinel `366`, while no frost gives `365`).
   - Multi-year median and P90 are computed in shifted `fy_doy` coordinates (preventing Dec/Jan wrap
     averaging to July!) and mapped back to calendar DOY `1..=365`.
   - False-spring GDD (`max(0, Tmean - 5 °C)`) accumulates strictly from `winter_doy` (never Jan 1

@@ -269,6 +269,43 @@ mod tests {
         );
     }
 
+    /// The committed v0.5.0 fixtures (`extremes_tail`, `frost_calendar`, `analogues.bin`)
+    /// are what the writer produces today (`CANOPI_REGEN_FIXTURES=1` rewrites them).
+    #[test]
+    fn committed_v05_fixtures_are_reproducible() {
+        let et_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-extremes-tail-n50e000.tif"
+        );
+        let et_tile = crate::extremes_tail::synthetic::extremes_tail();
+        let et_bytes =
+            write_raster_checked(et_tile.as_raster(), &temp("extremes-tail-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(et_fixture, &et_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(et_fixture).unwrap(),
+            et_bytes,
+            "extremes_tail fixture drifted"
+        );
+
+        let fc_fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/synthetic-frost-calendar-n50e000.tif"
+        );
+        let fc_tile = crate::frost_calendar::synthetic::frost_calendar();
+        let fc_bytes =
+            write_raster_checked(fc_tile.as_raster(), &temp("frost-calendar-fixture.tif")).unwrap();
+        if std::env::var_os("CANOPI_REGEN_FIXTURES").is_some() {
+            std::fs::write(fc_fixture, &fc_bytes).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(fc_fixture).unwrap(),
+            fc_bytes,
+            "frost_calendar fixture drifted"
+        );
+    }
+
     /// The committed fixture is what the writer produces today. Set
     /// `CANOPI_REGEN_FIXTURES=1` to rewrite it after a deliberate change.
     #[test]

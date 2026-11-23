@@ -22,8 +22,11 @@
 //! Features: `pipeline` (native only) builds the grid and provides the CLI;
 //! `wasm` exports [`wasm`] bindings.
 
+pub mod analogues;
 pub mod derived;
 pub mod extremes;
+pub mod extremes_tail;
+pub mod frost_calendar;
 pub mod grid;
 pub mod koppen;
 pub mod layer;

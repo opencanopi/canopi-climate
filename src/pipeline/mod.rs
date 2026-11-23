@@ -7,10 +7,13 @@
 //! follow-up.
 
 pub mod aggregate;
+pub mod analogues;
 pub mod assemble;
 pub mod build;
 pub mod cog;
 pub mod extremes;
+pub mod extremes_tail;
+pub mod frost_calendar;
 pub mod igh;
 pub mod layers;
 pub mod monthly;

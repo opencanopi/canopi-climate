@@ -54,12 +54,18 @@ pub enum Stage {
     Monthly,
     /// Layer: 0.25-degree monthly precipitation for 3 slots (after `tiles`).
     MonthlyPrecip,
+    /// Layer: static 1-in-10-year tail extremes, heat days >= 35 C and recent trend (after `tiles`).
+    ExtremesTail,
+    /// Layer: static hemisphere-aware frost calendar and false-spring risk (after `tiles`).
+    FrostCalendar,
+    /// Binary index: `analogues.bin` for 2050 Climate Twin k-NN search (after `tiles`, `monthly`, `monthly-precip`, `regions`).
+    Analogues,
     /// Compare the delta method with CHELSA's own projections.
     CheckFuture,
 }
 
 /// Stages run by default, in order.
-pub const DEFAULT_STAGES: [Stage; 11] = [
+pub const DEFAULT_STAGES: [Stage; 14] = [
     Stage::Verify,
     Stage::Koppen,
     Stage::Chelsa,
@@ -71,6 +77,9 @@ pub const DEFAULT_STAGES: [Stage; 11] = [
     Stage::Extremes,
     Stage::Monthly,
     Stage::MonthlyPrecip,
+    Stage::ExtremesTail,
+    Stage::FrostCalendar,
+    Stage::Analogues,
 ];
 
 /// Build settings.
@@ -172,6 +181,9 @@ pub fn run(cfg: &BuildConfig, stages: &[Stage]) -> Result<()> {
             Stage::Extremes => super::extremes::stage_extremes(cfg)?,
             Stage::Monthly => super::monthly::stage_monthly(cfg)?,
             Stage::MonthlyPrecip => super::monthly_precip::stage_monthly_precip(cfg)?,
+            Stage::ExtremesTail => super::extremes_tail::stage_extremes_tail(cfg)?,
+            Stage::FrostCalendar => super::frost_calendar::stage_frost_calendar(cfg)?,
+            Stage::Analogues => super::analogues::stage_analogues(cfg)?,
             Stage::CheckFuture => stage_check_future(cfg)?,
         }
         eprintln!(
