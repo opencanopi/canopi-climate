@@ -21,25 +21,23 @@ the build inputs (`ee/era5land_phenology.tif`, `ee/terraclimate_water_balance.ti
      wettest month (from `ECMWF/ERA5_LAND/MONTHLY_AGGR`, 1991-2020) so SH/tropical dry seasons
      crossing Dec 31 -> Jan 1 are never split.
 
-3. `era5land_phenology_<hemi>_<y0>_<y1>` (12 x 5-year hemisphere chunks: `nh` and `sh` x
-   1991-1995 .. 2016-2020; 5 bands, int16 tenths of CP, NODATA = -32768, exported at 0.25-deg
-   `1440x360` per hemisphere with `shardSize=128` and bilinearly resampled to `GRID_E5L` 0.1-deg
-   in `combine`):
+3. `era5land_phenology` (5 bands, int16 CP, NODATA = -32768, 1991-2020):
    From `ECMWF/ERA5_LAND/DAILY_AGGR` (`temperature_2m_min`, `temperature_2m_max`):
-   Fishman (1987) Dynamic Model Chill Portions accumulated over a 7-month (~212-day) winter
-   window (Oct-Apr for NH `0..90N`, Apr-Oct for SH `90S..0`).
-   Uses 7 parallel monthly `iterate()` chunks (each with a 2-day warm-up overlap to initialize
-   the intermediate product `x`, `float32` accumulator) and 6 four-hourly closed-form ODE steps
-   per day (`DT_HOURS = 4.0`, matching exact 1-hour Fishman within ~1-3 CP on single-year spot
-   checks and <1 CP on 30-year climatology) across dT in {0, +1, +2, +3, +4 C}:
+   Downloaded directly via GEE `getDownloadURL` as monthly 0.25-deg (`1440x360` per hemisphere,
+   `int16` tenths of degC) daily stacks (zero Drive quota / zero batch-queue stall), then
+   integrated locally in vectorized float32 using the **exact continuous 7-month hourly
+   (`DT_HOURS = 1.0`, 24 steps/day)** Fishman (1987) Dynamic Model (Oct-Apr for NH `0..90N`,
+   Apr-Oct for SH `90S..0`) across dT in {0, +1, +2, +3, +4 C}, averaged over 1991-2020, and
+   bilinearly resampled (with nearest coastal fallback) to `GRID_E5L` 0.1-deg:
    - `chill_portions_0c`, `chill_portions_1c`, `chill_portions_2c`,
      `chill_portions_3c`, `chill_portions_4c`
 
 Usage:
     python scripts/ee/v06_layers.py --project canopi-515022 check
-    python scripts/ee/v06_layers.py --project canopi-515022 export
+    python scripts/ee/v06_layers.py --project canopi-515022 export --only tc,cdd
     python scripts/ee/v06_layers.py --project canopi-515022 status
     python scripts/ee/v06_layers.py --project canopi-515022 download --out <dir>
+    python scripts/ee/v06_layers.py --project canopi-515022 pheno-fetch --out <dir>
     python scripts/ee/v06_layers.py --project canopi-515022 combine --out <dir>
 """
 
@@ -68,18 +66,11 @@ GRID_E5L = dict(
 
 TC_NAME = "terraclimate_water_balance"
 CDD_CHUNKS = [(1991, 2000), (2001, 2010), (2011, 2020)]
-# 6 x 5-year chunks x 2 hemispheres (NH 0..90N, SH 90S..0) at 0.25-deg with DT_HOURS=4.0:
-# ~50x fewer pixel-ODE-steps/yr than global 0.1-deg 2-hourly dual-hemisphere exports.
-PHENO_CHUNKS = [
-    (1991, 1995),
-    (1996, 2000),
-    (2001, 2005),
-    (2006, 2010),
-    (2011, 2015),
-    (2016, 2020),
-]
+# 15 x 2-year chunks x 2 hemispheres (NH 0..90N, SH 90S..0) at 0.25-deg with DT_HOURS=4.0
+# and shardSize=32: ~50x fewer pixel-ODE-steps/yr and 40x lower worker tile RAM than 5-yr shardSize=128.
+PHENO_CHUNKS = [(y, y + 1) for y in range(BASE[0], BASE[1] + 1, 2)]
 PHENO_HEMIS = ("nh", "sh")
-PHENO_SHARD_SIZE = 128
+PHENO_SHARD_SIZE = 32
 
 GRID_PHENO_NH = dict(
     crs="EPSG:4326",
@@ -113,11 +104,254 @@ def pheno_chunk_name(hemi: str, y0: int, y1: int) -> str:
 
 
 def all_task_names() -> list[str]:
-    return (
-        [TC_NAME]
-        + [cdd_chunk_name(a, b) for a, b in CDD_CHUNKS]
-        + [pheno_chunk_name(h, a, b) for h in PHENO_HEMIS for a, b in PHENO_CHUNKS]
+    return [TC_NAME] + [cdd_chunk_name(a, b) for a, b in CDD_CHUNKS]
+
+
+def _pheno_month_jobs() -> list[tuple[str, str, int, int]]:
+    """All (hemi, var, year, month) monthly daily-temperature stacks needed for 1991-2020 winters."""
+    jobs: list[tuple[str, str, int, int]] = []
+    # NH winters: Oct..Dec of 1991..2020 and Jan..Apr of 1992..2021
+    nh_ym = [(y, m) for y in range(BASE[0], BASE[1] + 1) for m in (10, 11, 12)] + [
+        (y + 1, m) for y in range(BASE[0], BASE[1] + 1) for m in (1, 2, 3, 4)
+    ]
+    # SH winters: Apr..Oct of 1991..2020
+    sh_ym = [(y, m) for y in range(BASE[0], BASE[1] + 1) for m in (4, 5, 6, 7, 8, 9, 10)]
+    for hemi, ym_list in (("nh", nh_ym), ("sh", sh_ym)):
+        for var in ("tmin", "tmax"):
+            for y, m in sorted(set(ym_list)):
+                jobs.append((hemi, var, y, m))
+    return jobs
+
+
+def cmd_pheno_fetch(args) -> None:
+    """Download monthly 0.25-deg ERA5-Land daily Tmin/Tmax stacks directly via GEE getDownloadURL."""
+    import concurrent.futures
+    import time
+    import urllib.request
+
+    dst_dir = Path(args.out) / "pheno_daily"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    jobs = _pheno_month_jobs()
+    pending = [j for j in jobs if not (dst_dir / f"{j[0]}_{j[1]}_{j[2]}_{j[3]:02d}.tif").exists()]
+    print(f"pheno-fetch: {len(jobs) - len(pending)}/{len(jobs)} cached, {len(pending)} to download")
+    if not pending:
+        return
+
+    var_band = {"tmin": "temperature_2m_min", "tmax": "temperature_2m_max"}
+
+    def fetch_one(job: tuple[str, str, int, int]) -> str:
+        hemi, var, y, m = job
+        path = dst_dir / f"{hemi}_{var}_{y}_{m:02d}.tif"
+        tmp = dst_dir / f".{hemi}_{var}_{y}_{m:02d}.tif.part"
+        start = f"{y}-{m:02d}-01"
+        ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+        end = f"{ny}-{nm:02d}-01"
+        grid = GRID_PHENO_NH if hemi == "nh" else GRID_PHENO_SH
+        for attempt in range(4):
+            try:
+                col = (
+                    ee.ImageCollection(ERA5_DAILY)
+                    .select(var_band[var])
+                    .filterDate(start, end)
+                    .sort("system:time_start")
+                    .map(
+                        lambda img: img.subtract(273.15)
+                        .multiply(10.0)
+                        .round()
+                        .toInt16()
+                        .unmask(NODATA, False)
+                    )
+                )
+                url = col.toBands().getDownloadURL({**grid, "format": "GEO_TIFF"})
+                data = urllib.request.urlopen(url, timeout=180).read()
+                tmp.write_bytes(data)
+                tmp.replace(path)
+                return f"{path.name} ({len(data) // 1024} KB)"
+            except Exception as exc:
+                if attempt == 3:
+                    raise RuntimeError(f"failed {path.name}: {exc}") from exc
+                time.sleep(2.0 * (attempt + 1))
+        raise RuntimeError(f"unreachable {path.name}")
+
+    done = 0
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futs = {pool.submit(fetch_one, j): j for j in pending}
+        for fut in concurrent.futures.as_completed(futs):
+            fut.result()
+            done += 1
+            if done % 50 == 0 or done == len(pending):
+                elapsed = time.time() - t0
+                rate = done / max(elapsed, 0.1)
+                eta = (len(pending) - done) / max(rate, 1e-6)
+                print(f"  downloaded {done}/{len(pending)} ({elapsed:.0f}s elapsed, ETA {eta:.0f}s)", flush=True)
+
+
+_FISHMAN_C_SRC = r"""
+#include <math.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#define LUT_N 2401 /* 220.0 K .. 340.0 K at 0.05 K resolution */
+
+void fishman_season(
+    const float *tmid,    /* (n_land, n_days) contiguous per pixel */
+    const float *trange,  /* (n_land, n_days) contiguous per pixel */
+    const float *cos_w,   /* (24,) */
+    int n_days,
+    int n_land,
+    float *cp_out         /* (5, n_land) */
+) {
+    const double ln_a0_div_a1 = -30.54354837558665;
+    const double ln_a1_dt     =  42.38945182297704; /* dt = 1.0 h */
+    float xs_lut[LUT_N];
+    float decay_lut[LUT_N];
+    float xi_lut[LUT_N];
+    for (int k = 0; k < LUT_N; ++k) {
+        double tk = 220.0 + 0.05 * (double)k;
+        double inv_tk = 1.0 / tk;
+        xs_lut[k] = (float)exp(8735.3 * inv_tk + ln_a0_div_a1);
+        double k1_dt = exp(ln_a1_dt - 12888.8 * inv_tk);
+        decay_lut[k] = (float)exp(-k1_dt);
+        double arg = 443.2 * (tk - 277.0) * inv_tk;
+        if (arg < -50.0) arg = -50.0;
+        if (arg >  50.0) arg =  50.0;
+        xi_lut[k] = (float)(1.0 / (1.0 + exp(-arg)));
+    }
+
+    for (int i = 0; i < n_land; ++i) {
+        const float *tm_row = tmid + (size_t)i * (size_t)n_days;
+        const float *tr_row = trange + (size_t)i * (size_t)n_days;
+        for (int s = 0; s < 5; ++s) {
+            float dt = (float)s;
+            float x = 0.0f;
+            float cp = 0.0f;
+            for (int d = 0; d < n_days; ++d) {
+                float tm = tm_row[d] + dt;
+                float tr = tr_row[d];
+                for (int h = 0; h < 24; ++h) {
+                    float tk = tm + tr * cos_w[h];
+                    int k = (int)((tk - 220.0f) * 20.0f + 0.5f);
+                    if (k < 0) k = 0;
+                    if (k >= LUT_N) k = LUT_N - 1;
+                    float xs = xs_lut[k];
+                    float x_inter = xs - (xs - x) * decay_lut[k];
+                    if (x_inter >= 1.0f) {
+                        float delta = x_inter * xi_lut[k];
+                        cp += delta;
+                        x = x_inter - delta;
+                    } else {
+                        x = x_inter;
+                    }
+                }
+            }
+            cp_out[(size_t)s * (size_t)n_land + (size_t)i] = cp;
+        }
+    }
+}
+"""
+
+
+def _compile_fishman_so(cache_dir: Path) -> str | None:
+    import shutil
+    import subprocess
+
+    cc = shutil.which("gcc") or shutil.which("cc")
+    if not cc:
+        return None
+    so_path = cache_dir / ".fishman_kernel.so"
+    c_path = cache_dir / ".fishman_kernel.c"
+    c_path.write_text(_FISHMAN_C_SRC)
+    subprocess.run([cc, "-O3", "-shared", "-fPIC", str(c_path), "-lm", "-o", str(so_path)], check=True)
+    return str(so_path)
+
+
+def _fishman_season_worker(task: tuple[str, int, str, str | None]) -> tuple[str, int, object, float]:
+    """Compute exact 1-hour (24 steps/day) continuous 7-month Fishman CP for one (hemi, year)."""
+    import ctypes
+    import numpy as np
+    import rasterio
+
+    hemi, y, daily_dir_s, so_path = task
+    daily_dir = Path(daily_dir_s)
+    months = (
+        [(y, 10), (y, 11), (y, 12), (y + 1, 1), (y + 1, 2), (y + 1, 3), (y + 1, 4)]
+        if hemi == "nh"
+        else [(y, 4), (y, 5), (y, 6), (y, 7), (y, 8), (y, 9), (y, 10)]
     )
+    tmin_list = []
+    tmax_list = []
+    dy = -0.5
+    for yy, mm in months:
+        with rasterio.open(daily_dir / f"{hemi}_tmin_{yy}_{mm:02d}.tif") as s:
+            dy = float(s.transform.e)
+            arr = s.read()
+        # getDownloadURL without explicit region returns full-globe 1440x360 (dy=-0.50);
+        # slice to the target hemisphere so NH uses rows 0..179 (90N..0) and SH uses 180..359 (0..90S).
+        if abs(dy + 0.5) < 0.05 and arr.shape[1] == 360:
+            arr = arr[:, :180, :] if hemi == "nh" else arr[:, 180:, :]
+        tmin_list.append(arr)
+        with rasterio.open(daily_dir / f"{hemi}_tmax_{yy}_{mm:02d}.tif") as s:
+            arr = s.read()
+        if abs(dy + 0.5) < 0.05 and arr.shape[1] == 360:
+            arr = arr[:, :180, :] if hemi == "nh" else arr[:, 180:, :]
+        tmax_list.append(arr)
+
+    tmin_all = np.concatenate(tmin_list, axis=0)  # (D, H, W) int16 tenths of C
+    tmax_all = np.concatenate(tmax_list, axis=0)
+    n_days, h_out, w_out = tmin_all.shape
+    valid = (tmin_all[0] != NODATA) & (tmax_all[0] != NODATA)
+    idx = np.flatnonzero(valid)
+    n_land = int(idx.size)
+
+    # Transpose to (N_land, D) so each pixel's time series is contiguous in L1 cache.
+    tmin_k = tmin_all.reshape(n_days, -1)[:, idx].T.astype(np.float32) * 0.1 + 273.15
+    tmax_k = tmax_all.reshape(n_days, -1)[:, idx].T.astype(np.float32) * 0.1 + 273.15
+    tmid = np.ascontiguousarray(0.5 * (tmin_k + tmax_k), dtype=np.float32)
+    trange = np.ascontiguousarray(np.maximum(0.0, tmax_k - tmin_k), dtype=np.float32)
+    cos_w = np.ascontiguousarray(
+        [-0.5 * math.cos(2.0 * math.pi * (h - 3.0) / 24.0) for h in range(24)], dtype=np.float32
+    )
+    cp = np.zeros((5, n_land), dtype=np.float32)
+
+    if so_path:
+        lib = ctypes.CDLL(so_path)
+        fp = ctypes.POINTER(ctypes.c_float)
+        lib.fishman_season.argtypes = [fp, fp, fp, ctypes.c_int, ctypes.c_int, fp]
+        lib.fishman_season(
+            tmid.ctypes.data_as(fp),
+            trange.ctypes.data_as(fp),
+            cos_w.ctypes.data_as(fp),
+            n_days,
+            n_land,
+            cp.ctypes.data_as(fp),
+        )
+    else:
+        dt_shifts = np.array([0.0, 1.0, 2.0, 3.0, 4.0], dtype=np.float32)[:, None]
+        ln_a0_div_a1 = np.float32(math.log(5.434359174e-14))
+        ln_a1_dt = np.float32(math.log(2.567e18 * 1.0))
+        x = np.zeros((5, n_land), dtype=np.float32)
+        for d in range(n_days):
+            tm_d = tmid[:, d][None, :]
+            tr_d = trange[:, d][None, :]
+            for cw in cos_w:
+                tk = np.clip(tm_d + tr_d * cw + dt_shifts, 220.0, 340.0)
+                inv_tk = np.float32(1.0) / tk
+                xs = np.exp(np.float32(8735.3) * inv_tk + ln_a0_div_a1)
+                k1_dt = np.exp(ln_a1_dt - np.float32(12888.8) * inv_tk)
+                x_inter = xs - (xs - x) * np.exp(-k1_dt)
+                trig = x_inter >= 1.0
+                if np.any(trig):
+                    arg = np.clip(np.float32(443.2) * (tk[trig] - np.float32(277.0)) * inv_tk[trig], -50.0, 50.0)
+                    xi = np.float32(1.0) / (np.float32(1.0) + np.exp(-arg))
+                    delta = x_inter[trig] * xi
+                    cp[trig] += delta
+                    x_inter[trig] -= delta
+                x = x_inter
+
+    out = np.full((5, h_out * w_out), np.nan, dtype=np.float32)
+    out[:, idx] = cp
+    return hemi, y, out.reshape(5, h_out, w_out), dy
 
 
 def terraclimate_water_balance_image() -> ee.Image:
@@ -528,27 +762,47 @@ def cmd_combine(args) -> None:
         out_arr = np.where(np.isnan(mean_cdd), NODATA, np.rint(mean_cdd)).astype(np.int16)[None, :, :]
         _write_gtiff(out / "era5land_cdd.tif", out_arr, prof, ["cdd_max_days"])
 
-    # 3. ERA5-Land Phenology (average 6 x 5-year chunks per hemisphere at 0.25-deg, stack NH+SH,
-    #    and bilinearly resample to GRID_E5L 0.1-deg with nearest fallback for coastal cells -> int16 CP)
-    nh_paths = [raw / f"{pheno_chunk_name('nh', a, b)}.tif" for a, b in PHENO_CHUNKS]
-    sh_paths = [raw / f"{pheno_chunk_name('sh', a, b)}.tif" for a, b in PHENO_CHUNKS]
-    if all(p.exists() for p in nh_paths + sh_paths):
+    # 3. ERA5-Land Phenology (local exact 1-hour continuous 7-month Fishman ODE from pheno_daily/
+    #    at 0.25-deg, averaged over 1991-2020, stacked NH+SH, and bilinearly resampled to GRID_E5L)
+    daily_dir = out / "pheno_daily"
+    all_daily = [daily_dir / f"{h}_{v}_{y}_{m:02d}.tif" for h, v, y, m in _pheno_month_jobs()]
+    if all(p.exists() for p in all_daily):
+        import concurrent.futures
+        import os
+        import time
         from rasterio.transform import Affine
         from rasterio.warp import Resampling, reproject
 
-        def mean_hemi(paths):
-            arrays = []
-            for p in paths:
-                with rasterio.open(p) as src:
-                    arr = src.read().astype(np.float32)
-                    arr[arr == NODATA] = np.nan
-                    arrays.append(arr / 10.0)
-            return np.nanmean(np.stack(arrays, axis=0), axis=0)
+        t0 = time.time()
+        so_path = _compile_fishman_so(daily_dir)
+        tasks = [(hemi, y, str(daily_dir), so_path) for hemi in ("nh", "sh") for y in range(BASE[0], BASE[1] + 1)]
+        nh_sum = sh_sum = nh_cnt = sh_cnt = None
+        src_dy = -0.5
 
-        nh_mean = mean_hemi(nh_paths)
-        sh_mean = mean_hemi(sh_paths)
-        global_025 = np.concatenate([nh_mean, sh_mean], axis=1)  # (5, 720, 1440)
-        src_transform = Affine(0.25, 0.0, -180.0, 0.0, -0.25, 90.0)
+        workers = min(os.cpu_count() or 4, 8)
+        print(f"computing exact 1-hour Fishman CP for {len(tasks)} hemisphere-seasons on {workers} cores...")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+            for hemi, _y, arr, dy in pool.map(_fishman_season_worker, tasks):
+                src_dy = dy
+                if nh_sum is None:
+                    nh_sum = np.zeros_like(arr, dtype=np.float64)
+                    sh_sum = np.zeros_like(arr, dtype=np.float64)
+                    nh_cnt = np.zeros(arr.shape, dtype=np.int32)
+                    sh_cnt = np.zeros(arr.shape, dtype=np.int32)
+                ok = ~np.isnan(arr)
+                if hemi == "nh":
+                    nh_sum[ok] += arr[ok]
+                    nh_cnt[ok] += 1
+                else:
+                    sh_sum[ok] += arr[ok]
+                    sh_cnt[ok] += 1
+
+        nh_mean = np.where(nh_cnt > 0, nh_sum / np.maximum(nh_cnt, 1), np.nan).astype(np.float32)
+        sh_mean = np.where(sh_cnt > 0, sh_sum / np.maximum(sh_cnt, 1), np.nan).astype(np.float32)
+        print(f"computed 30-yr hourly Fishman CP in {time.time() - t0:.1f}s")
+
+        global_grid = np.concatenate([nh_mean, sh_mean], axis=1)
+        src_transform = Affine(0.25, 0.0, -180.0, 0.0, src_dy, 90.0)
         dst_transform = Affine(0.1, 0.0, -180.05, 0.0, -0.1, 90.05)
         dst_shape = (len(PHENO_BANDS), 1801, 3600)
 
@@ -556,7 +810,7 @@ def cmd_combine(args) -> None:
         dst_near = np.full(dst_shape, np.nan, dtype=np.float32)
         for b in range(len(PHENO_BANDS)):
             reproject(
-                source=global_025[b],
+                source=global_grid[b],
                 destination=dst_bilin[b],
                 src_transform=src_transform,
                 src_crs="EPSG:4326",
@@ -567,7 +821,7 @@ def cmd_combine(args) -> None:
                 resampling=Resampling.bilinear,
             )
             reproject(
-                source=global_025[b],
+                source=global_grid[b],
                 destination=dst_near[b],
                 src_transform=src_transform,
                 src_crs="EPSG:4326",
@@ -599,16 +853,21 @@ def main() -> None:
     sub.add_parser("status", help="list Earth Engine export task status")
     dl = sub.add_parser("download", help="fetch exported GeoTIFFs from Google Drive")
     dl.add_argument("--out", required=True, help="directory under which drive/ is stored")
-    cb = sub.add_parser("combine", help="combine chunked Drive GeoTIFFs into build inputs")
-    cb.add_argument("--out", required=True, help="same directory passed to download")
+    pf = sub.add_parser("pheno-fetch", help="download monthly 0.25-deg ERA5-Land daily Tmin/Tmax via getDownloadURL")
+    pf.add_argument("--out", required=True, help="directory under which pheno_daily/ is stored")
+    pf.add_argument("--workers", type=int, default=6, help="parallel GEE download workers (default: 6)")
+    cb = sub.add_parser("combine", help="combine Drive GeoTIFFs + pheno_daily into build inputs")
+    cb.add_argument("--out", required=True, help="same directory passed to download / pheno-fetch")
     args = p.parse_args()
 
-    ee.Initialize(project=args.project)
+    if args.cmd != "combine":
+        ee.Initialize(project=args.project)
     {
         "check": cmd_check,
         "export": cmd_export,
         "status": cmd_status,
         "download": cmd_download,
+        "pheno-fetch": cmd_pheno_fetch,
         "combine": cmd_combine,
     }[args.cmd](args)
 

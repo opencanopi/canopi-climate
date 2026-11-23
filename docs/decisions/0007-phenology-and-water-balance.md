@@ -54,13 +54,14 @@
   - Tropics with `T > 13 °C` year-round yield valid `0` CP (never `NODATA`). Equatorial highlands (e.g.,
     Quito, Kiambu) accumulate cool-night chill year-round; `phenology` reports the single-season 7-month
     accumulation for their hemisphere.
-- **Four-hourly closed-form Fishman (1987) ODE in GEE (monthly-chunked with 2-day warm-up):**
-  - Hourly ERA5-Land (`262,800` images/pixel) and full-season 212-day daily `iterate()` exceed GEE's
-    expression-graph and EECU budgets. Instead, we partition each 7-month winter into **7 parallel
-    monthly `iterate()` chunks** (each preceded by a 2-day warm-up overlap to initialize the short-memory
-    intermediate product `x`, discarding warm-up CP), running 6 four-hourly cosine diurnal steps per day
-    (`Δt = 4 h`, minimum at 03:00, maximum at 15:00) from `ECMWF/ERA5_LAND/DAILY_AGGR`
-    (`temperature_2m_min`, `temperature_2m_max`):
+- **Hourly closed-form Fishman (1987) ODE (continuous 7-month season, locally integrated from GEE daily stacks):**
+  - Running multi-decade Fishman `iterate()` directly inside GEE burns >100k EECU-s per chunk. Instead,
+    `scripts/ee/v06_layers.py pheno-fetch` downloads monthly 0.25° (`1440×360` per hemisphere, `int16`
+    tenths of °C) daily `temperature_2m_min` / `temperature_2m_max` stacks from `ECMWF/ERA5_LAND/DAILY_AGGR`
+    directly via GEE `getDownloadURL` (zero Drive quota, ~8 min total), and `combine` integrates the
+    **exact continuous 7-month hourly (`Δt = 1 h`, 24 steps/day)** cosine diurnal Fishman (1987) ODE
+    (minimum at 03:00, maximum at 15:00) in vectorized local float32 across all 30 seasons (1991–2020)
+    and all 5 warming shifts `ΔT ∈ {0, +1, +2, +3, +4 °C}`:
     - $E_0 = 4153.5\text{ K}$, $E_1 = 12888.8\text{ K}$, $A_0 = 139500\text{ h}^{-1}$,
       $A_1 = 2.567 \times 10^{18}\text{ h}^{-1}$, $\text{slp} = 1.6\text{ K}^{-1}$, $T_{\text{elt}} = 277.0\text{ K}$.
     - $x_s = (A_0 / A_1) \exp((E_1 - E_0) / T_K)$, $k_1 = A_1 \exp(-E_1 / T_K)$,
@@ -69,11 +70,9 @@
       $\xi = 1 / (1 + \exp(-\text{ftmprt}))$.
     - When $x_{\text{inter}} \ge 1$: $\text{CP} \mathrel{+}= \xi \cdot x_{\text{inter}}$ and
       $x \leftarrow x_{\text{inter}} (1 - \xi)$; else $x \leftarrow x_{\text{inter}}$.
-  - Exported in **12 × 5-year hemisphere chunks** (`nh` and `sh` × `1991–1995` … `2016–2020`) at 0.25°
-    (`1440×360` per hemisphere, `shardSize=128`), averaged locally per hemisphere, stacked, and bilinearly
-    resampled (with nearest coastal fallback) to ERA5-Land's 0.1° grid in `cmd_combine()`.
-    Verified against exact 1-hour Fishman across 5 cities × 5 warming shifts (max single-year diff ≤ 3.7 CP,
-    30-year mean diff < 1 CP).
+  - The 30-year NH + SH 0.25° means are stacked and bilinearly resampled (with nearest coastal fallback)
+    onto ERA5-Land's 0.1° grid (`ee/era5land_phenology.tif`). This eliminates monthly chunk warm-up error
+    AND gives true 1-hour temporal resolution in <10 minutes wall-clock time.
 - **Regridding & lookup:** Bilinearly interpolated from ERA5-Land's 0.1° grid to canopi's cell centres
   (nearest-within-5-cells coastal fallback), clamped to non-negative integers. No spatial search at lookup:
   read at the climate answer's `(cell_lat, cell_lon)` in its `tile` (`phenology::at_cell`; WASM
