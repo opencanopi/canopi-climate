@@ -258,6 +258,9 @@ fn eval_soil_ph(site: &TrajectorySiteInput, env: &SpeciesEnvelope) -> Option<Fac
     if env.min_ph.is_none() && env.max_ph.is_none() {
         return None;
     }
+    if env.min_ph.is_some_and(|v| !v.is_finite()) || env.max_ph.is_some_and(|v| !v.is_finite()) {
+        return None;
+    }
     let mut worst: Option<f64> = None;
     for ph in [site.ph_topsoil, site.ph_subsoil].into_iter().flatten() {
         if !ph.is_finite() {
@@ -320,6 +323,21 @@ fn eval_drainage(site: &TrajectorySiteInput, env: &SpeciesEnvelope) -> Option<Fa
     })
 }
 
+fn push_margin(
+    margins: &mut Vec<FactorMargin>,
+    factor: FactorId,
+    margin: f64,
+    unit: &'static str,
+    scale: f64,
+) {
+    margins.push(FactorMargin {
+        factor,
+        margin: round2(margin),
+        unit,
+        score: round2(margin_score(margin, scale)),
+    });
+}
+
 fn eval_period(
     snap: &PeriodSiteSnapshot,
     site: &TrajectorySiteInput,
@@ -327,57 +345,51 @@ fn eval_period(
 ) -> PeriodEvaluation {
     let mut margins = Vec::new();
 
-    if let (Some(tmin), Some(min_req)) = (snap.tmin_extreme_c, env.min_tmin_extreme_c) {
-        let m = tmin - min_req;
-        margins.push(FactorMargin {
-            factor: FactorId::ColdExtreme,
-            margin: round2(m),
-            unit: "C",
-            score: round2(margin_score(m, 5.0)),
-        });
+    if let (Some(tmin), Some(min_req)) = (snap.tmin_extreme_c, env.min_tmin_extreme_c)
+        && tmin.is_finite()
+        && min_req.is_finite()
+    {
+        push_margin(&mut margins, FactorId::ColdExtreme, tmin - min_req, "C", 5.0);
     }
-    if let (Some(tmax), Some(max_req)) = (snap.tmax_extreme_c, env.max_tmax_extreme_c) {
-        let m = max_req - tmax;
-        margins.push(FactorMargin {
-            factor: FactorId::HeatExtreme,
-            margin: round2(m),
-            unit: "C",
-            score: round2(margin_score(m, 4.0)),
-        });
+    if let (Some(tmax), Some(max_req)) = (snap.tmax_extreme_c, env.max_tmax_extreme_c)
+        && tmax.is_finite()
+        && max_req.is_finite()
+    {
+        push_margin(&mut margins, FactorId::HeatExtreme, max_req - tmax, "C", 4.0);
     }
-    if let (Some(cwd), Some(max_cwd)) = (snap.cwd_mm, env.max_cwd_mm) {
-        let m = max_cwd - cwd;
-        margins.push(FactorMargin {
-            factor: FactorId::WaterBalance,
-            margin: round2(m),
-            unit: "mm",
-            score: round2(margin_score(m, 150.0)),
-        });
-    } else if let (Some(p), Some(min_p)) = (snap.precip_mm, env.min_precip_mm) {
-        let m = p - min_p;
-        margins.push(FactorMargin {
-            factor: FactorId::WaterBalance,
-            margin: round2(m),
-            unit: "mm",
-            score: round2(margin_score(m, 150.0)),
-        });
-    } else if let (Some(dm), Some(max_dm)) = (snap.dry_months, env.max_dry_months) {
-        let m = max_dm - dm;
-        margins.push(FactorMargin {
-            factor: FactorId::WaterBalance,
-            margin: round2(m),
-            unit: "months",
-            score: round2(margin_score(m, 2.0)),
-        });
+    if let (Some(cwd), Some(max_cwd)) = (snap.cwd_mm, env.max_cwd_mm)
+        && cwd.is_finite()
+        && max_cwd.is_finite()
+    {
+        push_margin(
+            &mut margins,
+            FactorId::WaterBalance,
+            max_cwd - cwd,
+            "mm",
+            150.0,
+        );
+    } else if let (Some(p), Some(min_p)) = (snap.precip_mm, env.min_precip_mm)
+        && p.is_finite()
+        && min_p.is_finite()
+    {
+        push_margin(&mut margins, FactorId::WaterBalance, p - min_p, "mm", 150.0);
+    } else if let (Some(dm), Some(max_dm)) = (snap.dry_months, env.max_dry_months)
+        && dm.is_finite()
+        && max_dm.is_finite()
+    {
+        push_margin(
+            &mut margins,
+            FactorId::WaterBalance,
+            max_dm - dm,
+            "months",
+            2.0,
+        );
     }
-    if let (Some(cp), Some(min_cp)) = (snap.chill_portions, env.min_chill_portions) {
-        let m = cp - min_cp;
-        margins.push(FactorMargin {
-            factor: FactorId::Chill,
-            margin: round2(m),
-            unit: "CP",
-            score: round2(margin_score(m, 15.0)),
-        });
+    if let (Some(cp), Some(min_cp)) = (snap.chill_portions, env.min_chill_portions)
+        && cp.is_finite()
+        && min_cp.is_finite()
+    {
+        push_margin(&mut margins, FactorId::Chill, cp - min_cp, "CP", 15.0);
     }
     if let Some(m) = eval_soil_ph(site, env) {
         margins.push(m);
@@ -385,14 +397,11 @@ fn eval_period(
     if let Some(m) = eval_drainage(site, env) {
         margins.push(m);
     }
-    if let (Some(fs), Some(max_fs)) = (site.false_spring_pct, env.max_false_spring_pct) {
-        let m = max_fs - fs;
-        margins.push(FactorMargin {
-            factor: FactorId::FalseSpring,
-            margin: round2(m),
-            unit: "%",
-            score: round2(margin_score(m, 20.0)),
-        });
+    if let (Some(fs), Some(max_fs)) = (site.false_spring_pct, env.max_false_spring_pct)
+        && fs.is_finite()
+        && max_fs.is_finite()
+    {
+        push_margin(&mut margins, FactorId::FalseSpring, max_fs - fs, "%", 20.0);
     }
 
     let worst = margins.iter().min_by(|a, b| a.score.total_cmp(&b.score));
@@ -543,5 +552,57 @@ mod tests {
         let empty = evaluate_trajectory(&site, &SpeciesEnvelope::default());
         assert_eq!(empty.trajectory_class, TrajectoryClass::Stable);
         assert!(empty.periods.today.margins.is_empty());
+    }
+
+    #[test]
+    fn skips_non_finite_inputs_and_envelope_bounds() {
+        let mut site = TrajectorySiteInput {
+            today: snap("1991-2020", f64::NAN, f64::INFINITY, f64::NAN, f64::NAN),
+            mid_century: snap("2041-2070", -6.0, 36.0, 250.0, 65.0),
+            late_century: snap("2071-2099", -5.0, 38.0, 300.0, 55.0),
+            ph_topsoil: Some(6.5),
+            ph_subsoil: Some(6.8),
+            hand_m: Some(10.0),
+            clay_30_100_pct: Some(25.0),
+            false_spring_pct: Some(f64::NAN),
+            evaluated_layers: vec!["climate".into()],
+        };
+        let env = SpeciesEnvelope {
+            min_tmin_extreme_c: Some(-10.0),
+            max_tmax_extreme_c: Some(40.0),
+            max_cwd_mm: Some(500.0),
+            min_chill_portions: Some(20.0),
+            min_ph: Some(f64::NAN),
+            max_ph: Some(7.5),
+            max_false_spring_pct: Some(15.0),
+            ..Default::default()
+        };
+        let res = evaluate_trajectory(&site, &env);
+        // Today has all non-finite inputs + NaN min_ph -> no NaN margins emitted.
+        assert!(res.periods.today.margins.is_empty());
+        assert_eq!(res.periods.today.score, 1.0);
+        // Mid/late century evaluate finite factors, skip SoilPh due to NaN min_ph.
+        assert!(
+            res.periods
+                .mid_century
+                .margins
+                .iter()
+                .all(|m| m.margin.is_finite() && m.score.is_finite())
+        );
+        assert!(
+            !res.periods
+                .mid_century
+                .margins
+                .iter()
+                .any(|m| m.factor == FactorId::SoilPh)
+        );
+        // Finite false_spring_pct with NaN bound is also skipped cleanly.
+        site.false_spring_pct = Some(10.0);
+        let env2 = SpeciesEnvelope {
+            max_false_spring_pct: Some(f64::NAN),
+            ..Default::default()
+        };
+        let res2 = evaluate_trajectory(&site, &env2);
+        assert!(res2.periods.today.margins.is_empty());
     }
 }

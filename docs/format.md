@@ -181,10 +181,10 @@ This rule is named `"gaussen_p_lt_2t"` in the manifest's `dry_month_rule` field 
 
 | # | Band id | Stored | Unit after decoding | Scale |
 |---|---|---|---|---|
-| 0 | `ph_h2o` | pH × 10 | pH | 0.1 |
-| 1 | `sand` | g/kg | % of the fine earth | 0.1 |
-| 2 | `clay` | g/kg | % of the fine earth | 0.1 |
-| 3 | `fill_distance` | cells | cells | 1 |
+| 0 | `ph_h2o` | pH × 10 | `pH` | 0.1 |
+| 1 | `sand` | g/kg | `%` | 0.1 |
+| 2 | `clay` | g/kg | `%` | 0.1 |
+| 3 | `fill_distance` | cells | `cells` | 1 |
 
 Values are the 0–30 cm depth-weighted mean (weights 5, 10, 15) of SoilGrids 2.0. `fill_distance`
 is 0 for a measured cell and 1–8 for a land cell without a SoilGrids value that took the values of the
@@ -294,7 +294,46 @@ in the extremes tile named by its `tile` (`extremes::at_cell`; WebAssembly
 one entry per slot with `period`, `scenario`, `tmin_extreme_c`, `tmax_extreme_c` and `usda_zone`.
 `null` without a climate answer, on a grid without the layer, without the tile, or where the cell has
 no values. `usda_zone` of `t` °C: `f = t × 9/5 + 32`, `h = clamp(floor((f + 60) / 5), 0, 25)`,
-zone `h / 2 + 1` (integer division) followed by `a` for even `h`, `b` for odd (the `usda` table).
+zone `h / 2 + 1` (integer division) followed by `a` for even `h`, `b` for odd (the `usda` table);
+non-finite input returns `""` in Rust (`undefined` in WebAssembly).
+
+**Monthly answer** (`monthly::at_cell`; WebAssembly `lookupMonthly`): no search; read at the climate
+answer's `(cell_lat, cell_lon)` in its `tile`. Fields: `cell_lat`, `cell_lon`, `tile`, and `periods`
+(3 entries: historical, 2041–2070 `ssp245`, 2071–2099 `ssp245`), each with `period`, `scenario`,
+`tmean_c` (`[f64; 12]`), `tmin_c` (`[f64; 12]`), `dry_mask` (`u16`), `dry_months` (`u8`),
+`gdd_base_10` (`f64`), and `chill_months` (`u8`).
+
+**Monthly precipitation answer** (`monthly_precip::lookup` / `lookup_across`; WebAssembly
+`lookupMonthlyPrecip`): 0.25° search (own cell, else radius 1). Fields: `lat`, `lon`, `cell_lat`,
+`cell_lon`, `distance_cells`, `tile`, and `periods` (3 entries, each with `period`, `scenario`,
+`precip_mm`: `[f64; 12]`).
+
+**Tail extremes answer** (`extremes_tail::at_cell`; WebAssembly `lookupExtremesTail`): no search;
+read at the climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `tmin_p10_gap_c`, `tmax_p90_gap_c`,
+`heat_days_35c`, `recent_trend_c`.
+
+**Frost calendar answer** (`frost_calendar::at_cell`; WebAssembly `lookupFrostCalendar`): no search;
+read at the climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `regime` (`"seasonal"`,
+`"frost_free"`, or `"year_round"`), `last_spring_frost_doy` (`Option<u16>`, `null` when sentinel `0`
+or `366`), `last_spring_frost_p90_doy` (`Option<u16>`), `first_autumn_frost_doy` (`Option<u16>`),
+`frost_free_days` (`u16`), `frost_year_pct` (`u8`), `false_spring_pct` (`u8`).
+
+**Phenology answer** (`phenology::at_cell`; WebAssembly `lookupPhenology`): no search; read at the
+climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `chill_portions_0c`, `chill_portions_1c`,
+`chill_portions_2c`, `chill_portions_3c`, `chill_portions_4c`.
+
+**Water balance answer** (`water_balance::at_cell`; WebAssembly `lookupWaterBalance`): no search;
+read at the climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `cwd_mm`, `cwd_p90_mm`,
+`cdd_max_days`, `vpd_summer_kpa`.
+
+**Deep soil answer** (`soil_plus::lookup` / `lookup_across`; WebAssembly `lookupSoilPlus`): 0.05°
+radius-2 search (same as `soil`). Fields: `lat`, `lon`, `cell_lat`, `cell_lon`, `distance_cells`,
+`tile`, `soc_0_30_g_kg`, `om_0_30_pct`, `bdod_0_30_g_cm3`, `cfvo_0_30_pct`, `cfvo_30_100_pct`,
+`ph_30_100`, `clay_30_100_pct`.
+
+**Terrain answer** (`terrain::at_cell`; WebAssembly `lookupTerrain`): no search; read at the climate
+cell. Fields: `cell_lat`, `cell_lon`, `tile`, `elev_m`, `relief_m`, `slope_deg`, `hand_m`
+(`Option<f64>`, `null` outside MERIT-Hydro coverage).
 
 ## Errors
 
@@ -432,10 +471,10 @@ the climate answer's `(cell_lat, cell_lon)` in its `tile`.
 ### Phenology (`phenology/`): 5 bands
 
 1991–2020 mean annual Fishman (1987) Dynamic Model Chill Portions over a 7-month (~212-day) winter
-window (Oct–Apr for thermal-NH pixels where `winter_m` is Oct–Mar, Apr–Oct for thermal-SH pixels
-where `winter_m` is Apr–Sep, via 12 two-hourly closed-form ODE steps per day from ERA5-Land daily
-`Tmin`/`Tmax`), evaluated simultaneously at five uniform daily warming shifts `ΔT ∈ {0, +1, +2, +3, +4 °C}`
-so readers can interpolate future SSP2-4.5 and microclimate chill collapse from winter warming deltas.
+window (geographic Oct–Apr for `lat >= 0`, Apr–Oct for `lat < 0`, via 24 hourly `Δt = 1 h`
+closed-form ODE steps per day from ERA5-Land daily `Tmin`/`Tmax`), evaluated simultaneously at five
+uniform daily warming shifts `ΔT ∈ {0, +1, +2, +3, +4 °C}` so readers can interpolate future
+SSP2-4.5 and microclimate chill collapse from winter warming deltas.
 
 | # | Band id | Unit | Scale | Content |
 |---|---|---|---|---|
@@ -473,12 +512,12 @@ duplicating `fill_distance`.
 
 | # | Band id | Unit | Scale | Content |
 |---|---|---|---|---|
-| 0 | `soc_0_30` | g/kg | 0.5 | 0–30 cm soil organic carbon (feeds Saxton–Rawls AWC via `OM% = 0.1724 × soc`) |
-| 1 | `bdod_0_30` | g/cm³ | 0.01 | 0–30 cm bulk density of the fine earth fraction |
-| 2 | `cfvo_0_30` | % | 1 | 0–30 cm coarse fragments (> 2 mm, vol %; discounts topsoil AWC) |
-| 3 | `cfvo_30_100` | % | 1 | 30–100 cm coarse fragments (> 2 mm, vol %; skeletal subsoil proxy) |
-| 4 | `ph_30_100` | pH | 0.1 | 30–100 cm soil pH in water (calcareous subsoil / chlorosis proxy) |
-| 5 | `clay_30_100` | % | 1 | 30–100 cm clay content of the fine earth (subsoil drainage / claypan proxy) |
+| 0 | `soc_0_30` | `g/kg` | 0.5 | 0–30 cm soil organic carbon (feeds Saxton–Rawls AWC via `OM% = 0.1724 × soc`) |
+| 1 | `bdod_0_30` | `g/cm3` | 0.01 | 0–30 cm bulk density of the fine earth fraction |
+| 2 | `cfvo_0_30` | `%` | 1 | 0–30 cm coarse fragments (> 2 mm, vol %; discounts topsoil AWC) |
+| 3 | `cfvo_30_100` | `%` | 1 | 30–100 cm coarse fragments (> 2 mm, vol %; skeletal subsoil proxy) |
+| 4 | `ph_30_100` | `pH` | 0.1 | 30–100 cm soil pH in water (calcareous subsoil / chlorosis proxy) |
+| 5 | `clay_30_100` | `%` | 1 | 30–100 cm clay content of the fine earth (subsoil drainage / claypan proxy) |
 
 Every offset is 0. A cell has all 6 values or none. Lookup uses the same 0.05° radius-2 nearest search as
 `soil/` (or reads the `soil/` answer's cell directly).
@@ -490,10 +529,10 @@ read at the climate answer's `(cell_lat, cell_lon)` in its `tile` (no spatial se
 
 | # | Band id | Unit | Scale | Content |
 |---|---|---|---|---|
-| 0 | `elev_m` | m | 1 | cell mean elevation from Copernicus DEM GLO-30 (signed `int16`, preserves below-sea-level land) |
-| 1 | `relief_m` | m | 1 | within-cell elevation relief (`p95 − p05` of GLO-30 DEM, `>= 0`) |
-| 2 | `slope_deg` | ° | 0.1 | within-cell median terrain slope from GLO-30 (`0..=90`) |
-| 3 | `hand_m` | m | 0.1 | within-cell median Height Above Nearest Drainage from MERIT-Hydro v1.0.1 (ODbL 1.0, 60°S–90°N, clamped to `0..=3000` m; MAY be `NODATA` outside MERIT-Hydro coverage) |
+| 0 | `elev_m` | `m` | 1 | cell mean elevation from Copernicus DEM GLO-30 (signed `int16`, preserves below-sea-level land) |
+| 1 | `relief_m` | `m` | 1 | within-cell elevation relief (`p95 − p05` of GLO-30 DEM, `>= 0`) |
+| 2 | `slope_deg` | `deg` | 0.1 | within-cell median terrain slope from GLO-30 (`0..=90`) |
+| 3 | `hand_m` | `m` | 0.1 | within-cell median Height Above Nearest Drainage from MERIT-Hydro v1.0.1 (ODbL 1.0, 60°S–90°N, clamped to `0..=3000` m; MAY be `NODATA` outside MERIT-Hydro coverage) |
 
 Every offset is 0. A cell is valid whenever `elev_m`, `relief_m`, and `slope_deg` are set (`hand_m` is
 optional and decodes to `null` when `NODATA`).
@@ -514,8 +553,9 @@ monolithic tar or assembled from packs:
 | `v06` | `SHA256SUMS.pack`, `phenology/`, `water_balance/` |
 | `v07` | `SHA256SUMS.pack`, `soil_plus/`, `terrain/` |
 
-Each entry in `packs-vX.Y.Z.json` records `id`, `file`, `bytes`, `sha256`, `layers`, and `assets`, plus
-top-level `version`, `manifest_sha256`, and `climate_tiles_sha256`.
+Top-level fields in `packs-vX.Y.Z.json`: `format` (`"canopi-climate-packs"`), `format_version`
+(`1`), `version`, `manifest_sha256`, `climate_tiles_sha256`, and `packs[]`. Each entry in `packs[]`
+records `id`, `file`, `bytes`, `sha256`, `file_count`, `layers`, and `assets`.
 
 ## Compatibility rule
 
@@ -535,9 +575,10 @@ A crate release that keeps the grid (0.2.1) names the grid release it was tested
 | `tests/fixtures/synthetic-expected.json` | the committed synthetic tiles `tests/fixtures/synthetic{,-soil,-regions,-extremes}-n50e000.tif` (written by `tile::synthetic`, `layer::synthetic` and `extremes::synthetic`) | `UPDATE_FIXTURES=1 cargo test` | plain `cargo test` (stale file fails); the wasm smoke runs every `own_tile` point through the WebAssembly build |
 | `vectors/lookup.json` | the release grid in `release/grid.json` | `canopi-climate vectors --grid <dir> --points vectors/points.csv -o vectors/lookup.json` | CI's grid job (`--check`, ignoring `cli`); attached to each release by `release.yml` |
 
-Both hold `points` (`name`, `lat`, `lon`, `own_tile`, and `expect`: the climate, soil, regions and
-extremes answers, or `"invalid"`) and `tables`: `legend`, `margin`, `texture`, `codes` (`encode`,
-`decode`), `decode` (scale decoding), `usda` (USDA zones) and `dry_month` (Gaussen `gaussen_p_lt_2t`
-rule). `vectors/lookup.json` has the website goldens' shape (`cli`, `grid_manifest_sha256`,
-`points`) plus `own_tile` and `tables`. A port passes when it reproduces every `expect` its lookup
-form can answer and every table row.
+Both hold `points` (`name`, `lat`, `lon`, `own_tile`, and `expect`: the `climate`, `soil`,
+`soil_plus`, `regions`, `extremes`, `extremes_tail`, `frost_calendar`, `monthly`, `monthly_precip`,
+`phenology`, `water_balance`, and `terrain` answers, or `"invalid"`) and `tables`: `legend`,
+`margin`, `texture`, `codes` (`encode`, `decode`), `decode` (scale decoding), `usda` (USDA zones)
+and `dry_month` (Gaussen `gaussen_p_lt_2t` rule). `vectors/lookup.json` has the website goldens'
+shape (`cli`, `grid_manifest_sha256`, `points`) plus `own_tile` and `tables`. A port passes when it
+reproduces every `expect` its lookup form can answer and every table row.

@@ -338,6 +338,7 @@ impl AnalogueIndex {
         }
         let close_threshold = read_f32(bytes, 112);
         let novel_threshold = read_f32(bytes, 116);
+        validate_header_params(&mean, &inv_std, &weight, close_threshold, novel_threshold)?;
 
         let mut records = Vec::with_capacity(count);
         for r in 0..count {
@@ -418,7 +419,7 @@ impl AnalogueIndex {
         opts: &SearchOptions,
     ) -> Result<AnalogueResult, AnalogueError> {
         let hdr = parse_header(bytes)?;
-        if opts.k == 0 || hdr.count == 0 {
+        if opts.k == 0 || hdr.count == 0 || !query_and_opts_valid(query, opts) {
             return Ok(AnalogueResult {
                 novel_climate: true,
                 best_sigma: None,
@@ -452,7 +453,7 @@ impl AnalogueIndex {
     /// Search for the top-`k` spatially deduplicated historical analogues matching `query`.
     #[must_use]
     pub fn search(&self, query: &AnalogueQuery, opts: &SearchOptions) -> AnalogueResult {
-        if opts.k == 0 || self.records.is_empty() {
+        if opts.k == 0 || self.records.is_empty() || !query_and_opts_valid(query, opts) {
             return AnalogueResult {
                 novel_climate: true,
                 best_sigma: None,
@@ -538,15 +539,60 @@ fn parse_header(bytes: &[u8]) -> Result<ParsedHeader, AnalogueError> {
         inv_std[i] = read_f32(bytes, 48 + i * 4);
         weight[i] = read_f32(bytes, 80 + i * 4);
     }
+    let close_threshold = read_f32(bytes, 112);
+    let novel_threshold = read_f32(bytes, 116);
+    validate_header_params(&mean, &inv_std, &weight, close_threshold, novel_threshold)?;
     Ok(ParsedHeader {
         header_bytes,
         count,
         mean,
         inv_std,
         weight,
-        close_threshold: read_f32(bytes, 112),
-        novel_threshold: read_f32(bytes, 116),
+        close_threshold,
+        novel_threshold,
     })
+}
+
+fn validate_header_params(
+    mean: &[f32; FEATURES],
+    inv_std: &[f32; FEATURES],
+    weight: &[f32; FEATURES],
+    close_threshold: f32,
+    novel_threshold: f32,
+) -> Result<(), AnalogueError> {
+    for i in 0..FEATURES {
+        if !mean[i].is_finite() || !inv_std[i].is_finite() {
+            return Err(AnalogueError::Header(format!(
+                "non-finite normalization parameter at feature {i}"
+            )));
+        }
+        if !weight[i].is_finite() || weight[i] < 0.0 {
+            return Err(AnalogueError::Header(format!(
+                "invalid weight {} at feature {i}",
+                weight[i]
+            )));
+        }
+    }
+    if !close_threshold.is_finite() || !novel_threshold.is_finite() {
+        return Err(AnalogueError::Header(
+            "non-finite match threshold in header".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn query_and_opts_valid(query: &AnalogueQuery, opts: &SearchOptions) -> bool {
+    query.lat.is_finite()
+        && (-90.0..=90.0).contains(&query.lat)
+        && query.lon.is_finite()
+        && query.tmean_cold_c.is_finite()
+        && query.tmean_warm_c.is_finite()
+        && query.tmin_cold_c.is_finite()
+        && query.tmax_warm_c.is_finite()
+        && query.precip_mm.is_finite()
+        && query.summer_rain_frac.is_finite()
+        && opts.min_distance_km.is_finite()
+        && opts.exclude_radius_km.is_finite()
 }
 
 #[inline]
@@ -656,7 +702,7 @@ where
     F: Fn(usize) -> AnalogueRecord,
 {
     let cmp = |a: &(f32, usize), b: &(f32, usize)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1));
-    let mut matches: Vec<AnalogueMatch> = Vec::with_capacity(opts.k);
+    let mut matches: Vec<AnalogueMatch> = Vec::with_capacity(opts.k.min(scored.len()));
     let round2 = |x: f64| (x * 100.0).round() / 100.0;
     let round3 = |x: f64| (x * 1000.0).round() / 1000.0;
     let round1 = |x: f64| (x * 10.0).round() / 10.0;
@@ -930,5 +976,87 @@ mod tests {
     fn haversine_handles_antimeridian_cleanly() {
         let d = haversine_km(0.0, 179.9, 0.0, -179.9);
         assert!((d - 22.24).abs() < 0.5, "got {d} km");
+    }
+
+    #[test]
+    fn huge_k_does_not_oom_or_panic() {
+        let idx = sample_index();
+        let bytes = idx.to_bytes();
+        let q = AnalogueQuery {
+            lat: 48.86,
+            lon: 2.35,
+            tmean_cold_c: 6.0,
+            tmean_warm_c: 22.5,
+            tmin_cold_c: 2.5,
+            tmax_warm_c: 28.5,
+            precip_mm: 655.0,
+            aridity_index: Some(0.90),
+            dry_months: 1,
+            summer_rain_frac: 0.48,
+        };
+        let opts = SearchOptions {
+            k: usize::MAX,
+            min_distance_km: 0.0,
+            exclude_radius_km: 0.0,
+        };
+        let r1 = idx.search(&q, &opts);
+        let r2 = AnalogueIndex::search_bytes(&bytes, &q, &opts).unwrap();
+        assert_eq!(r1.matches.len(), idx.records.len());
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn rejects_non_finite_queries_and_corrupt_header_params() {
+        let idx = sample_index();
+        let bytes = idx.to_bytes();
+        let base_q = AnalogueQuery {
+            lat: 48.86,
+            lon: 2.35,
+            tmean_cold_c: 6.0,
+            tmean_warm_c: 22.5,
+            tmin_cold_c: 2.5,
+            tmax_warm_c: 28.5,
+            precip_mm: 655.0,
+            aridity_index: Some(0.90),
+            dry_months: 1,
+            summer_rain_frac: 0.48,
+        };
+        // Non-finite precip_mm or lat/lon must not silently match or bypass exclude_radius_km.
+        for bad_q in [
+            AnalogueQuery {
+                precip_mm: f64::NAN,
+                ..base_q.clone()
+            },
+            AnalogueQuery {
+                lat: f64::NAN,
+                ..base_q.clone()
+            },
+            AnalogueQuery {
+                lon: f64::INFINITY,
+                ..base_q.clone()
+            },
+        ] {
+            let r = idx.search(&bad_q, &SearchOptions::default());
+            assert!(r.matches.is_empty());
+            assert!(r.novel_climate);
+            let rb = AnalogueIndex::search_bytes(&bytes, &bad_q, &SearchOptions::default())
+                .unwrap();
+            assert!(rb.matches.is_empty());
+        }
+
+        // Negative weight or NaN mean/threshold in header is rejected by both from_bytes and search_bytes.
+        let mut neg_w = bytes.clone();
+        neg_w[80..84].copy_from_slice(&(-1.0f32).to_le_bytes());
+        assert!(AnalogueIndex::from_bytes(&neg_w).is_err());
+        assert!(AnalogueIndex::search_bytes(&neg_w, &base_q, &SearchOptions::default()).is_err());
+
+        let mut nan_mean = bytes.clone();
+        nan_mean[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(AnalogueIndex::from_bytes(&nan_mean).is_err());
+        assert!(AnalogueIndex::search_bytes(&nan_mean, &base_q, &SearchOptions::default()).is_err());
+
+        let mut nan_thresh = bytes;
+        nan_thresh[112..116].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(AnalogueIndex::from_bytes(&nan_thresh).is_err());
     }
 }

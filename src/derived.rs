@@ -52,7 +52,7 @@ pub struct Photoperiod {
     /// Seasonal day-length amplitude `max_hours - min_hours` (hours).
     pub amplitude_hours: f64,
     /// Mid-month day length for January through December (hours).
-    pub monthly_hours: [f32; 12],
+    pub monthly_hours: [f64; 12],
     /// Days per 365-day year with 0 hours of geometric daylight (`<= 0.001` h).
     pub polar_night_days: u16,
     /// Days per 365-day year with 24 hours of geometric daylight (`>= 23.999` h).
@@ -74,9 +74,9 @@ pub fn photoperiod(lat_deg: f64) -> Option<Photoperiod> {
     let max_hours = round2(max_raw);
     let amplitude_hours = round2(max_raw - min_raw);
 
-    let mut monthly_hours = [0f32; 12];
+    let mut monthly_hours = [0f64; 12];
     for (m, &doy) in MID_MONTH_DOY.iter().enumerate() {
-        monthly_hours[m] = round2(day_length_hours(lat_deg, doy)) as f32;
+        monthly_hours[m] = round2(day_length_hours(lat_deg, doy));
     }
 
     let mut polar_night_days = 0u16;
@@ -351,5 +351,12 @@ mod tests {
         assert_eq!(photoperiod(90.1), None);
         assert_eq!(photoperiod(-90.1), None);
         assert_eq!(photoperiod(f64::NAN), None);
+
+        // BUG-07: monthly_hours is [f64; 12] and serializes cleanly without f32 float noise.
+        let json = serde_json::to_string(&nh).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for h in val["monthly_hours"].as_array().unwrap() {
+            assert!(h.to_string().len() <= 6, "noisy float in JSON: {h}");
+        }
     }
 }

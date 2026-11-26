@@ -109,15 +109,33 @@ pub struct CellTerrain {
     pub relief_m: f64,
 }
 
+/// Normalize frost DOY on deserialization: accepts `null` / omitted, legacy
+/// sentinels `0` (frost-free) and `366` (year-round), or `1..=365`.
+fn de_frost_doy<'de, D>(de: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<u16> = serde::Deserialize::deserialize(de)?;
+    Ok(raw.filter(|&d| (1..=365).contains(&d)))
+}
+
 /// Optional frost-calendar inputs for microclimate adjustment.
+///
+/// Compatible with both [`crate::frost_calendar::FrostCalendarLookup`] (`Option<u16>`,
+/// where `None` / JSON `null` indicates frost-free or year-round frost) and legacy
+/// sentinel encodings (`0` = frost-free, `366` = year-round, normalized to `None` on
+/// deserialization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrostDates {
-    /// Median last spring frost DOY (`1..=365`, `0` = frost-free, `366` = year-round).
-    pub last_spring_frost_doy: u16,
-    /// 90th-percentile last spring frost DOY (`1..=365`, `0`, `366`).
-    pub last_spring_frost_p90_doy: u16,
-    /// Median first autumn frost DOY (`1..=365`, `0`, `366`).
-    pub first_autumn_frost_doy: u16,
+    /// Median last spring frost DOY (`Some(1..=365)`, or `None` when frost-free / year-round).
+    #[serde(default, deserialize_with = "de_frost_doy")]
+    pub last_spring_frost_doy: Option<u16>,
+    /// 90th-percentile last spring frost DOY (`Some(1..=365)`, or `None`).
+    #[serde(default, deserialize_with = "de_frost_doy")]
+    pub last_spring_frost_p90_doy: Option<u16>,
+    /// Median first autumn frost DOY (`Some(1..=365)`, or `None`).
+    #[serde(default, deserialize_with = "de_frost_doy")]
+    pub first_autumn_frost_doy: Option<u16>,
     /// Median frost-free season length (`0..=365`).
     pub frost_free_days: u16,
 }
@@ -171,7 +189,7 @@ pub struct SiteClimate {
 }
 
 /// Site-specific topography passed to [`adjust`].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct MicroclimateInput {
     /// Site elevation in metres (`None` skips lapse-rate adjustment).
     #[serde(default)]
@@ -260,49 +278,72 @@ fn round3(x: f64) -> f64 {
 /// Project Chill Portions from a 5-band `[0, +1, +2, +3, +4 °C]` curve at arbitrary `delta_t_c`.
 fn project_chill_curve(curve: [f64; 5], delta_t_c: f64) -> f64 {
     if !delta_t_c.is_finite() {
-        return curve[0];
+        return curve[0].clamp(0.0, 250.0);
     }
     if delta_t_c <= 0.0 {
-        // Cooling below baseline: extrapolate gently with [0, +1] slope (clamped >= 0).
+        // Cooling below baseline: extrapolate gently with [0, +1] slope, capped to [0, 250] CP.
         let slope = curve[1] - curve[0];
-        return (curve[0] + slope * delta_t_c).max(0.0);
+        return (curve[0] + slope * delta_t_c).clamp(0.0, 250.0);
     }
     if delta_t_c >= 4.0 {
         let slope = curve[4] - curve[3];
-        return (curve[4] + slope * (delta_t_c - 4.0)).max(0.0);
+        return (curve[4] + slope * (delta_t_c - 4.0)).clamp(0.0, 250.0);
     }
     let idx = delta_t_c.floor() as usize;
     let frac = delta_t_c - idx as f64;
     let a = curve[idx];
     let b = curve[idx + 1];
-    (a + (b - a) * frac).max(0.0)
+    (a + (b - a) * frac).clamp(0.0, 250.0)
 }
 
-/// Shift a frost DOY by `delta_days` (`1..=365` wraps cyclically; sentinels `0` and `366` preserved).
-fn shift_doy(doy: u16, delta_days: i32) -> u16 {
-    if doy == 0 || doy >= 366 {
-        return doy;
-    }
-    let shifted = (i32::from(doy) - 1 + delta_days).rem_euclid(365) + 1;
-    u16::try_from(shifted).unwrap_or(doy)
+/// Shift an optional frost DOY by `delta_days` (`1..=365` wraps cyclically; `None` and
+/// legacy `0`/`366` sentinels normalize to `None`).
+fn shift_doy(doy: Option<u16>, delta_days: i32) -> Option<u16> {
+    let d = doy.filter(|&v| (1..=365).contains(&v))?;
+    let shifted = (i32::from(d) - 1 + delta_days).rem_euclid(365) + 1;
+    u16::try_from(shifted).ok()
 }
 
 fn adjust_frost(frost: FrostDates, delta_t_night_c: f64) -> FrostDates {
+    // Already year-round frost (0) or fully frost-free (365 with no frost DOYs): preserve regime.
+    let has_doy = frost
+        .last_spring_frost_doy
+        .is_some_and(|d| (1..=365).contains(&d))
+        || frost
+            .last_spring_frost_p90_doy
+            .is_some_and(|d| (1..=365).contains(&d))
+        || frost
+            .first_autumn_frost_doy
+            .is_some_and(|d| (1..=365).contains(&d));
+    if frost.frost_free_days == 0 || (frost.frost_free_days >= 365 && !has_doy) {
+        return FrostDates {
+            last_spring_frost_doy: None,
+            last_spring_frost_p90_doy: None,
+            first_autumn_frost_doy: None,
+            frost_free_days: frost.frost_free_days.min(365),
+        };
+    }
+
     // Warmer nights (delta_t > 0) -> earlier last spring frost (-shift), later first autumn frost (+shift).
     let shift = (delta_t_night_c * FROST_DAYS_PER_C).round() as i32;
-    let last_spring = shift_doy(frost.last_spring_frost_doy, -shift);
-    let last_spring_p90 = shift_doy(frost.last_spring_frost_p90_doy, -shift);
-    let first_autumn = shift_doy(frost.first_autumn_frost_doy, shift);
-    let free = if frost.frost_free_days == 0 || frost.frost_free_days >= 365 {
-        frost.frost_free_days
-    } else {
-        let adjusted = i32::from(frost.frost_free_days) + 2 * shift;
-        u16::try_from(adjusted.clamp(0, 365)).unwrap_or(frost.frost_free_days)
-    };
+    let adjusted_free = (i32::from(frost.frost_free_days) + 2 * shift).clamp(0, 365);
+    let free = u16::try_from(adjusted_free).unwrap_or(frost.frost_free_days.min(365));
+
+    // When cooling collapses the frost-free season to 0 (year-round frost) or warming
+    // eliminates frost (365 days), emit `None` instead of crossing/wrapping DOYs.
+    if free == 0 || free >= 365 {
+        return FrostDates {
+            last_spring_frost_doy: None,
+            last_spring_frost_p90_doy: None,
+            first_autumn_frost_doy: None,
+            frost_free_days: free,
+        };
+    }
+
     FrostDates {
-        last_spring_frost_doy: last_spring,
-        last_spring_frost_p90_doy: last_spring_p90,
-        first_autumn_frost_doy: first_autumn,
+        last_spring_frost_doy: shift_doy(frost.last_spring_frost_doy, -shift),
+        last_spring_frost_p90_doy: shift_doy(frost.last_spring_frost_p90_doy, -shift),
+        first_autumn_frost_doy: shift_doy(frost.first_autumn_frost_doy, shift),
         frost_free_days: free,
     }
 }
@@ -392,28 +433,70 @@ pub fn solar_irradiance_ratio(lat_deg: f64, slope_deg: f64, aspect_deg: f64) -> 
     }
 }
 
+fn check_finite(val: f64, name: &str) -> Result<(), MicroclimateError> {
+    if !val.is_finite() {
+        return Err(MicroclimateError::InvalidInput(format!(
+            "{name} must be finite"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_inputs(site: &SiteClimate, input: &MicroclimateInput) -> Result<(), MicroclimateError> {
     if !site.lat.is_finite() || !(-90.0..=90.0).contains(&site.lat) {
         return Err(MicroclimateError::InvalidInput(
             "lat must be finite and in [-90, 90]".into(),
         ));
     }
+    check_finite(site.tmean_cold_c, "tmean_cold_c")?;
+    check_finite(site.tmean_warm_c, "tmean_warm_c")?;
+    check_finite(site.tmin_cold_c, "tmin_cold_c")?;
+    check_finite(site.tmax_warm_c, "tmax_warm_c")?;
+    if let Some(v) = site.tmin_extreme_c {
+        check_finite(v, "tmin_extreme_c")?;
+    }
+    if let Some(v) = site.tmax_extreme_c {
+        check_finite(v, "tmax_extreme_c")?;
+    }
+    if let Some(v) = site.tmin_p10_gap_c {
+        check_finite(v, "tmin_p10_gap_c")?;
+    }
+    if let Some(v) = site.tmax_p90_gap_c {
+        check_finite(v, "tmax_p90_gap_c")?;
+    }
+    if let Some(arr) = site.monthly_tmean_c {
+        for v in arr {
+            check_finite(v, "monthly_tmean_c")?;
+        }
+    }
+    if let Some(arr) = site.monthly_tmin_c {
+        for v in arr {
+            check_finite(v, "monthly_tmin_c")?;
+        }
+    }
+    if let Some(arr) = site.chill_portions_curve {
+        for v in arr {
+            check_finite(v, "chill_portions_curve")?;
+        }
+    }
+    if let Some(v) = site.base_winter_delta_t_c {
+        check_finite(v, "base_winter_delta_t_c")?;
+    }
+    if let Some(v) = site.cwd_mm {
+        check_finite(v, "cwd_mm")?;
+    }
+    if let Some(ct) = site.cell_terrain {
+        check_finite(ct.elev_m, "cell_terrain.elev_m")?;
+        check_finite(ct.relief_m, "cell_terrain.relief_m")?;
+    }
     if !input.slope_deg.is_finite() || input.slope_deg < 0.0 {
         return Err(MicroclimateError::InvalidInput(
             "slope_deg must be finite and >= 0".into(),
         ));
     }
-    if !input.aspect_deg.is_finite() {
-        return Err(MicroclimateError::InvalidInput(
-            "aspect_deg must be finite".into(),
-        ));
-    }
-    if let Some(e) = input.site_elev_m
-        && !e.is_finite()
-    {
-        return Err(MicroclimateError::InvalidInput(
-            "site_elev_m must be finite".into(),
-        ));
+    check_finite(input.aspect_deg, "aspect_deg")?;
+    if let Some(e) = input.site_elev_m {
+        check_finite(e, "site_elev_m")?;
     }
     Ok(())
 }
@@ -552,9 +635,9 @@ mod tests {
                 2.0, 2.3, 4.5, 6.8, 10.4, 13.5, 15.3, 15.1, 12.2, 9.0, 5.1, 2.6,
             ]),
             frost: Some(FrostDates {
-                last_spring_frost_doy: 95,
-                last_spring_frost_p90_doy: 112,
-                first_autumn_frost_doy: 315,
+                last_spring_frost_doy: Some(95),
+                last_spring_frost_p90_doy: Some(112),
+                first_autumn_frost_doy: Some(315),
                 frost_free_days: 220,
             }),
             chill_portions_curve: Some([96.0, 88.0, 76.0, 62.0, 46.0]),
@@ -639,5 +722,106 @@ mod tests {
         .unwrap();
         assert_eq!(ridge.tmin_extreme_c, Some(-7.0));
         assert!(ridge.cwd_adjusted_mm.unwrap() > 250.0);
+    }
+
+    #[test]
+    fn frost_dates_accepts_null_and_legacy_sentinels_and_prevents_crossover() {
+        // BUG-03: FrostCalendarLookup JSON (with null DOYs) deserializes directly into FrostDates.
+        let frost_free_json = r#"{"last_spring_frost_doy":null,"last_spring_frost_p90_doy":null,"first_autumn_frost_doy":null,"frost_free_days":365,"regime":"frost_free"}"#;
+        let ff: FrostDates = serde_json::from_str(frost_free_json).unwrap();
+        assert_eq!(ff.last_spring_frost_doy, None);
+        assert_eq!(ff.frost_free_days, 365);
+
+        // Legacy sentinels (0 and 366) also deserialize cleanly to None.
+        let legacy_yr: FrostDates = serde_json::from_str(
+            r#"{"last_spring_frost_doy":366,"last_spring_frost_p90_doy":366,"first_autumn_frost_doy":366,"frost_free_days":0}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_yr.last_spring_frost_doy, None);
+        assert_eq!(legacy_yr.frost_free_days, 0);
+
+        // BUG-04: Strong cooling collapsing a short season to 0 days emits None instead of crossed DOYs.
+        let mut alpine = paris_site();
+        alpine.frost = Some(FrostDates {
+            last_spring_frost_doy: Some(170),
+            last_spring_frost_p90_doy: Some(180),
+            first_autumn_frost_doy: Some(185),
+            frost_free_days: 15,
+        });
+        let cooled = adjust(
+            &alpine,
+            &MicroclimateInput {
+                site_elev_m: Some(60.0),
+                slope_deg: 0.0,
+                aspect_deg: 0.0,
+                topo_position: TopoPosition::FrostHollow,
+            },
+        )
+        .unwrap();
+        let cf = cooled.frost.unwrap();
+        assert_eq!(cf.frost_free_days, 0);
+        assert_eq!(cf.last_spring_frost_doy, None);
+        assert_eq!(cf.first_autumn_frost_doy, None);
+
+        // Strong warming pushing frost-free days to 365 emits None instead of wrapped DOYs.
+        let mut mild = paris_site();
+        mild.cell_terrain = Some(CellTerrain {
+            elev_m: 1000.0,
+            relief_m: 1000.0,
+        });
+        mild.frost = Some(FrostDates {
+            last_spring_frost_doy: Some(15),
+            last_spring_frost_p90_doy: Some(25),
+            first_autumn_frost_doy: Some(355),
+            frost_free_days: 350,
+        });
+        let warmed = adjust(
+            &mild,
+            &MicroclimateInput {
+                site_elev_m: Some(500.0),
+                slope_deg: 0.0,
+                aspect_deg: 180.0,
+                topo_position: TopoPosition::Ridge,
+            },
+        )
+        .unwrap();
+        let wf = warmed.frost.unwrap();
+        assert_eq!(wf.frost_free_days, 365);
+        assert_eq!(wf.last_spring_frost_doy, None);
+        assert_eq!(wf.first_autumn_frost_doy, None);
+    }
+
+    #[test]
+    fn rejects_non_finite_site_climate_and_caps_cooling_chill() {
+        // BUG-06: Non-finite SiteClimate / CellTerrain fields are rejected.
+        let mut bad = paris_site();
+        bad.tmin_extreme_c = Some(f64::NAN);
+        assert!(adjust(&bad, &MicroclimateInput::default()).is_err());
+
+        let mut bad_terrain = paris_site();
+        bad_terrain.cell_terrain = Some(CellTerrain {
+            elev_m: f64::NAN,
+            relief_m: 100.0,
+        });
+        assert!(adjust(&bad_terrain, &MicroclimateInput::default()).is_err());
+
+        // Cooling chill extrapolation is capped at <= 250.0 CP.
+        let mut chill_site = paris_site();
+        chill_site.cell_terrain = Some(CellTerrain {
+            elev_m: 500.0,
+            relief_m: 3000.0,
+        });
+        chill_site.chill_portions_curve = Some([220.0, 180.0, 140.0, 100.0, 60.0]);
+        let cooled = adjust(
+            &chill_site,
+            &MicroclimateInput {
+                site_elev_m: Some(2000.0),
+                slope_deg: 0.0,
+                aspect_deg: 0.0,
+                topo_position: TopoPosition::MidSlope,
+            },
+        )
+        .unwrap();
+        assert!(cooled.chill_portions.unwrap() <= 250.0);
     }
 }

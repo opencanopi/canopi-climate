@@ -241,9 +241,13 @@ fn var_value(tile: &ExtremesTile, index: usize, var: Extreme, slot: usize) -> f6
 /// USDA hardiness zone of a mean annual extreme minimum (°C): 10 °F bands
 /// from zone 1 (-60 to -50 °F) to 13 (60 to 70 °F), each split into `a`
 /// (colder half) and `b`. Colder than -60 °F is `1a`, warmer than 70 °F
-/// `13b`. The bounds are in °F, so a value is converted before banding.
+/// `13b`. Returns `""` for non-finite input (`NaN` / `±inf`). The bounds
+/// are in °F, so a value is converted before banding.
 #[must_use]
 pub fn usda_zone(tmin_extreme_c: f64) -> String {
+    if !tmin_extreme_c.is_finite() {
+        return String::new();
+    }
     let f = tmin_extreme_c * 9.0 / 5.0 + 32.0;
     // Half-zones of 5 °F counted from -60 °F; 0 = 1a, 25 = 13b.
     let half = ((f + 60.0) / 5.0).floor().clamp(0.0, 25.0) as u32;
@@ -303,6 +307,9 @@ mod tests {
         assert_eq!(usda_zone(0.0), "10a"); // 32 °F: 30-35 °F
         assert_eq!(usda_zone(21.0), "13b"); // 69.8 °F
         assert_eq!(usda_zone(30.0), "13b");
+        assert_eq!(usda_zone(f64::NAN), "");
+        assert_eq!(usda_zone(f64::INFINITY), "");
+        assert_eq!(usda_zone(f64::NEG_INFINITY), "");
     }
 
     #[test]

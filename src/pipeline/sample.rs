@@ -18,10 +18,12 @@ use crate::monthly_precip::{MonthlyPrecipLookup, MonthlyPrecipTile, PRECIP_LOOKU
 use crate::phenology::{PhenologyLookup, PhenologyTile};
 use crate::regions::{REGION_BANDS, RegionsLookup};
 use crate::soil::{SOIL_BANDS, SoilLookup};
+use crate::soil_plus::{SOIL_PLUS_BANDS, SoilPlusLookup};
+use crate::terrain::{TerrainLookup, TerrainTile};
 use crate::tile::Tile;
 use crate::vectors::{
     ExtremesTailTiles, ExtremesTiles, FrostCalendarTiles, Getters, LayerTiles, MonthlyPrecipTiles,
-    MonthlyTiles, PhenologyTiles, Site, WaterBalanceTiles,
+    MonthlyTiles, PhenologyTiles, Site, TerrainTiles, WaterBalanceTiles,
 };
 use crate::water_balance::{WaterBalanceLookup, WaterBalanceTile};
 
@@ -48,6 +50,7 @@ pub struct Grid {
     monthly_precip_cache: HashMap<TileId, MonthlyPrecipTile>,
     phenology_cache: HashMap<TileId, PhenologyTile>,
     water_balance_cache: HashMap<TileId, WaterBalanceTile>,
+    terrain_cache: HashMap<TileId, TerrainTile>,
 }
 
 impl Grid {
@@ -96,6 +99,7 @@ impl Grid {
             monthly_precip_cache: HashMap::new(),
             phenology_cache: HashMap::new(),
             water_balance_cache: HashMap::new(),
+            terrain_cache: HashMap::new(),
         })
     }
 
@@ -164,9 +168,16 @@ impl Grid {
     pub fn site(&mut self, lat: f64, lon: f64, radius: usize, own_tile_only: bool) -> Result<Site> {
         self.load_climate(lat, lon, radius)?;
         let r = LAYER_LOOKUP_RADIUS;
-        let (soil, regions) = (self.has_layer("soil"), self.has_layer("regions"));
+        let (soil, soil_plus, regions) = (
+            self.has_layer("soil"),
+            self.has_layer(crate::soil_plus::DIR),
+            self.has_layer("regions"),
+        );
         if soil {
             self.load_layer("soil", SOIL_BANDS, lat, lon, r)?;
+        }
+        if soil_plus {
+            self.load_layer(crate::soil_plus::DIR, SOIL_PLUS_BANDS, lat, lon, r)?;
         }
         if regions {
             self.load_layer("regions", REGION_BANDS, lat, lon, r)?;
@@ -199,7 +210,11 @@ impl Grid {
         if water_balance {
             self.load_water_balance(lat, lon, radius)?;
         }
-        let (cache, layers, ext, ext_tail, frost, mon, mon_p, pheno, wb) = (
+        let terrain = self.has_layer(crate::terrain::DIR);
+        if terrain {
+            self.load_terrain(lat, lon, radius)?;
+        }
+        let (cache, layers, ext, ext_tail, frost, mon, mon_p, pheno, wb, tr) = (
             &self.cache,
             &self.layer_cache,
             &self.extremes_cache,
@@ -209,9 +224,11 @@ impl Grid {
             &self.monthly_precip_cache,
             &self.phenology_cache,
             &self.water_balance_cache,
+            &self.terrain_cache,
         );
         let climate_tiles = |id: TileId| cache.get(&id);
         let soil_tiles = |id: TileId| layers.get(&("soil".to_string(), id));
+        let soil_plus_tiles = |id: TileId| layers.get(&(crate::soil_plus::DIR.to_string(), id));
         let region_tiles = |id: TileId| layers.get(&("regions".to_string(), id));
         let extremes_tiles = |id: TileId| ext.get(&id);
         let extremes_tail_tiles = |id: TileId| ext_tail.get(&id);
@@ -220,9 +237,11 @@ impl Grid {
         let monthly_precip_tiles = |id: TileId| mon_p.get(&id);
         let phenology_tiles = |id: TileId| pheno.get(&id);
         let water_balance_tiles = |id: TileId| wb.get(&id);
+        let terrain_tiles = |id: TileId| tr.get(&id);
         let g = Getters {
             climate: &climate_tiles,
             soil: soil.then_some(&soil_tiles as LayerTiles<'_, '_>),
+            soil_plus: soil_plus.then_some(&soil_plus_tiles as LayerTiles<'_, '_>),
             regions: regions.then_some(&region_tiles as LayerTiles<'_, '_>),
             extremes: extremes.then_some(&extremes_tiles as ExtremesTiles<'_, '_>),
             extremes_tail: extremes_tail
@@ -235,6 +254,7 @@ impl Grid {
             phenology: phenology.then_some(&phenology_tiles as PhenologyTiles<'_, '_>),
             water_balance: water_balance
                 .then_some(&water_balance_tiles as WaterBalanceTiles<'_, '_>),
+            terrain: terrain.then_some(&terrain_tiles as TerrainTiles<'_, '_>),
         };
         crate::vectors::site(g, (lat, lon, radius), own_tile_only)
             .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
@@ -568,6 +588,12 @@ impl Grid {
                 Kind::WaterBalance
             } else if l.id == crate::terrain::DIR {
                 Kind::Terrain
+            } else if l.id == "soil" {
+                Kind::Soil
+            } else if l.id == crate::soil_plus::DIR {
+                Kind::SoilPlus
+            } else if l.id == "regions" {
+                Kind::Regions
             } else {
                 Kind::Layer(l.bands.len())
             };
@@ -590,10 +616,18 @@ impl Grid {
                     problems.push(format!("{}: checksum mismatch", t.path));
                 }
                 Ok(b) => {
-                    if let Some(p) = decode_problem(&b, kind, &t.name) {
+                    if let Some(p) = decode_problem(&b, kind, &t.name, t.complete_cells) {
                         problems.push(format!("{}: {p}", t.path));
                     }
                 }
+            }
+        }
+        if let Some(expected) = &self.manifest.climate_tiles_sha256 {
+            let actual = super::assemble::climate_tiles_sha256(&self.manifest.tiles);
+            if actual != *expected {
+                problems.push(format!(
+                    "manifest.json: climate_tiles_sha256 mismatch (computed {actual}, manifest {expected})"
+                ));
             }
         }
         if let Some(a) = &self.manifest.analogues {
@@ -628,7 +662,67 @@ impl Grid {
                 },
             }
         }
+        self.verify_sha256sums(&mut problems)?;
         Ok(problems)
+    }
+
+    fn verify_sha256sums(&self, problems: &mut Vec<String>) -> Result<()> {
+        let sums_path = self.dir.join("SHA256SUMS");
+        let text = match std::fs::read_to_string(&sums_path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(PipelineError::io(&sums_path, e)),
+        };
+        let mut sums: HashMap<&str, &str> = HashMap::new();
+        for (idx, raw) in text.lines().enumerate() {
+            let line = raw.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Some((hash, path)) = line.split_once("  ") else {
+                problems.push(format!("SHA256SUMS: line {} malformed", idx + 1));
+                continue;
+            };
+            if sums.insert(path, hash).is_some() {
+                problems.push(format!("SHA256SUMS: duplicate entry for {path}"));
+            }
+        }
+        // Verify manifest.json itself matches SHA256SUMS.
+        match sums.get("manifest.json") {
+            None => problems.push("SHA256SUMS: missing manifest.json".into()),
+            Some(&expected) => {
+                let mpath = self.dir.join("manifest.json");
+                let bytes = std::fs::read(&mpath).map_err(|e| PipelineError::io(&mpath, e))?;
+                if super::sha256_bytes(&bytes) != expected {
+                    problems.push("SHA256SUMS: manifest.json checksum mismatch".into());
+                }
+            }
+        }
+        // Verify every tile and analogues.bin listed in manifest appears in SHA256SUMS with matching hash.
+        for t in self
+            .manifest
+            .tiles
+            .iter()
+            .chain(self.manifest.layers.iter().flat_map(|l| l.tiles.iter()))
+        {
+            match sums.get(t.path.as_str()) {
+                None => problems.push(format!("SHA256SUMS: missing {}", t.path)),
+                Some(&h) if h != t.sha256 => {
+                    problems.push(format!("SHA256SUMS: checksum mismatch for {}", t.path));
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(a) = &self.manifest.analogues {
+            match sums.get(a.path.as_str()) {
+                None => problems.push(format!("SHA256SUMS: missing {}", a.path)),
+                Some(&h) if h != a.sha256 => {
+                    problems.push(format!("SHA256SUMS: checksum mismatch for {}", a.path));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
     }
 
     /// Tail extremes at a climate cell (`cell_lat`, `cell_lon`).
@@ -780,13 +874,93 @@ impl Grid {
             None => Ok(None),
         }
     }
+
+    fn load_terrain(&mut self, lat: f64, lon: f64, radius: usize) -> Result<()> {
+        let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
+        let ids = search_tiles(lat, lon, radius).map_err(bad)?;
+        if self.terrain_cache.len() + ids.len() > CACHE_TILES {
+            self.terrain_cache.clear();
+        }
+        for t in ids {
+            if self.terrain_cache.contains_key(&t) {
+                continue;
+            }
+            let key = (crate::terrain::DIR.to_string(), t.name());
+            let Some(rel) = self.layer_paths.get(&key) else {
+                continue;
+            };
+            let path = self.dir.join(rel);
+            let bytes = std::fs::read(&path).map_err(|e| PipelineError::io(&path, e))?;
+            let tile = TerrainTile::decode(&bytes)?;
+            if tile.id() != t {
+                return Err(PipelineError::Data(format!(
+                    "{}: holds tile {}",
+                    path.display(),
+                    tile.id()
+                )));
+            }
+            self.terrain_cache.insert(t, tile);
+        }
+        Ok(())
+    }
+
+    /// Deep soil (`soil_plus`) at a point (nearest cell with data within 2 cells).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn soil_plus(&mut self, lat: f64, lon: f64) -> Result<Option<SoilPlusLookup>> {
+        if !self.has_layer(crate::soil_plus::DIR) {
+            return Ok(None);
+        }
+        self.load_layer(
+            crate::soil_plus::DIR,
+            SOIL_PLUS_BANDS,
+            lat,
+            lon,
+            LAYER_LOOKUP_RADIUS,
+        )?;
+        let layers = &self.layer_cache;
+        crate::soil_plus::lookup_across(
+            |id| layers.get(&(crate::soil_plus::DIR.to_string(), id)),
+            lat,
+            lon,
+            LAYER_LOOKUP_RADIUS,
+        )
+        .map_err(|e| PipelineError::Data(format!("{lat}, {lon}: {e}")))
+    }
+
+    /// Terrain at a climate cell (`cell_lat`, `cell_lon`).
+    ///
+    /// # Errors
+    /// Invalid coordinate, unreadable tile.
+    pub fn terrain_at_cell(
+        &mut self,
+        cell_lat: f64,
+        cell_lon: f64,
+    ) -> Result<Option<TerrainLookup>> {
+        if !self.has_layer(crate::terrain::DIR) {
+            return Ok(None);
+        }
+        self.load_terrain(cell_lat, cell_lon, 0)?;
+        let Some(id) = TileId::of(cell_lat, cell_lon) else {
+            return Ok(None);
+        };
+        match self.terrain_cache.get(&id) {
+            Some(tile) => crate::terrain::at_cell(tile, cell_lat, cell_lon)
+                .map_err(|e| PipelineError::Data(format!("{cell_lat}, {cell_lon}: {e}"))),
+            None => Ok(None),
+        }
+    }
 }
 
 /// What a tile file holds.
 #[derive(Debug, Clone, Copy)]
 enum Kind {
     Climate,
-    /// A 0.05-degree site layer with this many bands.
+    Soil,
+    SoilPlus,
+    Regions,
+    /// A generic 0.05-degree site layer with this many bands.
     Layer(usize),
     Extremes,
     ExtremesTail,
@@ -798,23 +972,82 @@ enum Kind {
     Terrain,
 }
 
-/// Why a tile file does not decode as the tile `name` (`None`: it does).
-fn decode_problem(bytes: &[u8], kind: Kind, name: &str) -> Option<String> {
-    let id = match kind {
-        Kind::Climate => Tile::decode(bytes).map(|t| t.id()),
-        Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| t.id()),
-        Kind::Extremes => ExtremesTile::decode(bytes).map(|t| t.id()),
-        Kind::ExtremesTail => ExtremesTailTile::decode(bytes).map(|t| t.id()),
-        Kind::FrostCalendar => FrostCalendarTile::decode(bytes).map(|t| t.id()),
-        Kind::Monthly => MonthlyTile::decode(bytes).map(|t| t.id()),
-        Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes).map(|t| t.id()),
-        Kind::Phenology => PhenologyTile::decode(bytes).map(|t| t.id()),
-        Kind::WaterBalance => WaterBalanceTile::decode(bytes).map(|t| t.id()),
-        Kind::Terrain => crate::terrain::TerrainTile::decode(bytes).map(|t| t.id()),
+fn count_all_present(r: &crate::raster::Raster) -> usize {
+    (0..r.grid().tile_len())
+        .filter(|&i| {
+            let p = r.pixel(i);
+            !p.is_empty() && p.iter().all(|&v| v != crate::model::NODATA)
+        })
+        .count()
+}
+
+/// Why a tile file does not decode as the tile `name` or match `expected_complete`
+/// (`None`: it does).
+fn decode_problem(bytes: &[u8], kind: Kind, name: &str, expected_complete: u32) -> Option<String> {
+    let decoded: std::result::Result<(TileId, Option<usize>), crate::tile::TileError> = match kind {
+        Kind::Climate => Tile::decode(bytes).map(|t| (t.id(), Some(t.complete_cells()))),
+        Kind::Soil => LayerTile::decode(bytes, SOIL_BANDS).map(|t| {
+            let n = (0..crate::layer::LAYER_TILE_LEN)
+                .filter(|&i| crate::soil::has_soil(&t, i))
+                .count();
+            (t.id(), Some(n))
+        }),
+        Kind::SoilPlus => LayerTile::decode(bytes, SOIL_PLUS_BANDS).map(|t| {
+            let n = (0..crate::layer::LAYER_TILE_LEN)
+                .filter(|&i| crate::soil_plus::has_soil_plus(&t, i))
+                .count();
+            (t.id(), Some(n))
+        }),
+        Kind::Regions => LayerTile::decode(bytes, REGION_BANDS).map(|t| {
+            let r = t.as_raster();
+            let n = (0..crate::layer::LAYER_TILE_LEN)
+                .filter(|&i| r.pixel(i).iter().any(|&v| v != crate::model::NODATA))
+                .count();
+            (t.id(), Some(n))
+        }),
+        Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| (t.id(), None)),
+        Kind::Extremes => {
+            ExtremesTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
+        }
+        Kind::ExtremesTail => ExtremesTailTile::decode(bytes)
+            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+        Kind::FrostCalendar => FrostCalendarTile::decode(bytes)
+            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+        Kind::Monthly => {
+            MonthlyTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
+        }
+        Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes)
+            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+        Kind::Phenology => {
+            PhenologyTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
+        }
+        Kind::WaterBalance => WaterBalanceTile::decode(bytes)
+            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+        Kind::Terrain => TerrainTile::decode(bytes).map(|t| {
+            let r = t.as_raster();
+            let n = (0..r.grid().tile_len())
+                .filter(|&i| {
+                    let p = r.pixel(i);
+                    p.len() >= 3
+                        && p[0] != crate::model::NODATA
+                        && p[1] != crate::model::NODATA
+                        && p[2] != crate::model::NODATA
+                })
+                .count();
+            (t.id(), Some(n))
+        }),
     };
-    match id {
+    match decoded {
         Err(e) => Some(e.to_string()),
-        Ok(id) if id.name() != name => Some(format!("holds tile {id}")),
+        Ok((id, _)) if id.name() != name => Some(format!("holds tile {id}")),
+        Ok((_, Some(actual)))
+            if (matches!(kind, Kind::Climate) || expected_complete > 0)
+                && actual != expected_complete as usize =>
+        {
+            Some(format!(
+                "{actual} complete cells, manifest says {expected_complete}"
+            ))
+        }
         Ok(_) => None,
     }
 }
@@ -1386,6 +1619,7 @@ mod tests {
         let mut other = m.tiles[0].clone();
         other.name = "n40e000".into();
         m.tiles.push(other);
+        m.climate_tiles_sha256 = Some(super::super::assemble::climate_tiles_sha256(&m.tiles));
         std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
         let problems = Grid::open(&dir).unwrap().verify().unwrap();
         assert_eq!(problems, ["tiles/n50e000.tif: holds tile n50e000"]);
@@ -1558,6 +1792,38 @@ mod tests {
                 }
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn verify_catches_climate_tiles_sha256_sha256sums_and_complete_cells() {
+        // BUG-10: verify() catches tampered climate_tiles_sha256, complete_cells, and SHA256SUMS.
+        let dir = grid_dir("verify-hardened");
+        let mpath = dir.join("manifest.json");
+        let mut m: Manifest =
+            serde_json::from_str(&std::fs::read_to_string(&mpath).unwrap()).unwrap();
+        m.climate_tiles_sha256 = Some("0".repeat(64));
+        m.tiles[0].complete_cells += 1;
+        let mbytes = serde_json::to_vec(&m).unwrap();
+        std::fs::write(&mpath, &mbytes).unwrap();
+        std::fs::write(
+            dir.join("SHA256SUMS"),
+            format!("{}  manifest.json\n", "f".repeat(64)),
+        )
+        .unwrap();
+
+        let problems = Grid::open(&dir).unwrap().verify().unwrap();
+        assert!(
+            problems.iter().any(|p| p.contains("climate_tiles_sha256")),
+            "expected climate_tiles_sha256 mismatch, got {problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("complete cells")),
+            "expected complete_cells mismatch, got {problems:?}"
+        );
+        assert!(
+            problems.iter().any(|p| p.contains("SHA256SUMS")),
+            "expected SHA256SUMS problem, got {problems:?}"
         );
     }
 }

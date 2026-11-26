@@ -42,7 +42,7 @@ with the 0.1° climate cell whose elevation `microclimate::adjust` lapses from.
 - **Bands:**
   - `0`: `soc_0_30` (`g/kg`, scale `0.5`, stored `round(raw_dg_kg / 5.0)`) — feeds Saxton–Rawls AWC via
     `OM% = 0.1724 * soc_g_kg` (0.086% OM resolution).
-  - `1`: `bdod_0_30` (`g/cm³`, scale `0.01`, native `cg/cm³`) — flags compacted (`> 1.55`) and organic/peat
+  - `1`: `bdod_0_30` (`g/cm3`, scale `0.01`, native `cg/cm³`) — flags compacted (`> 1.55`) and organic/peat
     (`< 0.90`) soils.
   - `2`: `cfvo_0_30` (`%`, scale `1.0`, stored `round(raw_cm3_dm3 / 10.0)`) — topsoil coarse fragments;
     discounts topsoil AWC by `(1 - cfvo_0_30 / 100)`.
@@ -82,7 +82,7 @@ with the 0.1° climate cell whose elevation `microclimate::adjust` lapses from.
     `8848 m` Everest).
   - `1`: `relief_m` (`m`, scale `1.0`, `>= 0`) — within-cell elevation relief (`p95 - p05` of GLO-30 `DEM`),
     bounding lapse-rate clamping and characterizing topographic complexity.
-  - `2`: `slope_deg` (`°`, scale `0.1`, `0..=90`) — median terrain slope from GLO-30.
+  - `2`: `slope_deg` (`deg`, scale `0.1`, `0..=90`) — median terrain slope from GLO-30.
   - `3`: `hand_m` (`m`, scale `0.1`, clamped to `[0, 3000]` m; MAY be `NODATA` outside 60°S–90°N) — median
     Height Above Nearest Drainage from MERIT-Hydro (`< 2 m` floodplain/wetland, `2–5 m` moist toe-slope,
     `> 15 m` upland).
@@ -130,8 +130,8 @@ with the 0.1° climate cell whose elevation `microclimate::adjust` lapses from.
       `I_tilted = (1 - k_d) * max(0, cos θ_i) + k_d * max(0, s_U) * (1 + cos β) / 2`,
       `I_horiz = max(0, s_U)`.
     - Polar night guard: when `Σ I_horiz < 1e-6`, ratio = `1.0`.
-  - Outputs `solar_ratio_monthly: [f64; 12]`, `solar_ratio_annual`, `solar_ratio_growing_season`, and
-    optional `cwd_adjusted = cwd * solar_ratio_growing_season.clamp(0.7, 1.3)`.
+  - Outputs nested `solar_ratio: { monthly: [f64; 12], annual: f64, growing_season: f64 }` and
+    optional `cwd_adjusted_mm = round(cwd_mm * solar_ratio.growing_season.clamp(0.7, 1.3))`.
 
 #### 2.2 `evaluate_trajectory(site, species_envelope)`
 

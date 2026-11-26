@@ -123,11 +123,15 @@ pub fn lookup_extremes_js(
     }
 }
 
-/// USDA hardiness zone (`1a` ... `13b`) of a coldest night in °C.
+/// USDA hardiness zone (`1a` ... `13b`) of a coldest night in °C, or
+/// `undefined` for non-finite input.
 #[wasm_bindgen(js_name = usdaZone)]
 #[must_use]
-pub fn usda_zone_js(tmin_extreme_c: f64) -> String {
-    crate::extremes::usda_zone(tmin_extreme_c)
+pub fn usda_zone_js(tmin_extreme_c: f64) -> Option<String> {
+    if !tmin_extreme_c.is_finite() {
+        return None;
+    }
+    Some(crate::extremes::usda_zone(tmin_extreme_c))
 }
 
 /// Decode a `monthly` tile and read the cell holding (`cellLat`, `cellLon`):

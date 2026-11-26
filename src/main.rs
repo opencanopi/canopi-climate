@@ -86,9 +86,10 @@ enum Command {
         #[arg(long)]
         monthly: bool,
     },
-    /// Look one point up and print JSON: `climate`, `extremes`, `monthly`,
-    /// `monthly_precip`, `soil` and `regions` (each `null` when absent;
-    /// exit code 2 when all are).
+    /// Look one point up and print JSON: `climate`, `extremes`,
+    /// `extremes_tail`, `frost_calendar`, `monthly`, `monthly_precip`,
+    /// `phenology`, `water_balance`, `soil`, `soil_plus`, `terrain` and
+    /// `regions` (each `null` when absent; exit code 2 when all are).
     Lookup {
         /// Latitude (degrees north).
         #[arg(allow_hyphen_values = true)]

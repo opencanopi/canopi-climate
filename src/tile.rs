@@ -170,18 +170,25 @@ const GEOREF_TAGS: [u16; 2] = [33550, 33922];
 fn check_ifd(bytes: &[u8]) -> Result<(), TileError> {
     let past = |m: String| TileError::Tiff(format!("{m} lies past the end of the file"));
     let u16_at = |at: usize| -> Option<u16> {
-        Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
+        let end = at.checked_add(2)?;
+        Some(u16::from_le_bytes(bytes.get(at..end)?.try_into().ok()?))
     };
     let u32_at = |at: usize| -> Option<u32> {
-        Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+        let end = at.checked_add(4)?;
+        Some(u32::from_le_bytes(bytes.get(at..end)?.try_into().ok()?))
     };
     let ifd = u32_at(4).ok_or_else(|| past("the header".into()))? as usize;
     let n = usize::from(u16_at(ifd).ok_or_else(|| past("the IFD".into()))?);
-    if ifd + 2 + 12 * n + 4 > bytes.len() {
+    let ifd_end = ifd
+        .checked_add(2)
+        .and_then(|x| x.checked_add(12usize.checked_mul(n)?))
+        .and_then(|x| x.checked_add(4));
+    if ifd_end.is_none_or(|end| end > bytes.len()) {
         return Err(past("the IFD".into()));
     }
     let mut samples_per_pixel = false;
-    for e in (0..n).map(|i| ifd + 2 + 12 * i) {
+    for i in 0..n {
+        let e = ifd + 2 + 12 * i;
         let (tag, ty) = (u16_at(e).unwrap_or(0), u16_at(e + 2).unwrap_or(0));
         let count = u64::from(u32_at(e + 4).unwrap_or(0));
         // Value sizes of TIFF 6.0 and BigTIFF; an unknown type counts as one
@@ -194,13 +201,13 @@ fn check_ifd(bytes: &[u8]) -> Result<(), TileError> {
             5 | 10 | 12 | 16..=18 => 8,
             _ => 1,
         };
-        let size = width * count;
+        let size = width.saturating_mul(count);
         let at = if size <= 4 {
             (e + 8) as u64
         } else {
             u64::from(u32_at(e + 8).unwrap_or(0))
         };
-        if at + size > bytes.len() as u64 {
+        if at.checked_add(size).is_none_or(|end| end > bytes.len() as u64) {
             return Err(past(format!("tag {tag}")));
         }
         let typed = if INTEGER_TAGS.contains(&tag) {
@@ -300,7 +307,7 @@ fn georef_tile<R: std::io::Read + std::io::Seek>(
     let (Some(&sx), Some(&sy)) = (scale.first(), scale.get(1)) else {
         return Err(TileError::Georef("short ModelPixelScale".into()));
     };
-    if (sx - cell_deg).abs() > 1e-9 || (sy - cell_deg).abs() > 1e-9 {
+    if !((sx - cell_deg).abs() <= 1e-9 && (sy - cell_deg).abs() <= 1e-9) {
         return Err(TileError::Georef(format!("pixel size {sx} x {sy}")));
     }
     let [i, j, _, x, y, ..] = tie.as_slice() else {
@@ -310,7 +317,7 @@ fn georef_tile<R: std::io::Read + std::io::Seek>(
     let north = y + j * cell_deg;
     let id = TileId::of(north - cell_deg / 2.0, west + cell_deg / 2.0)
         .ok_or_else(|| TileError::Georef(format!("origin {west}, {north}")))?;
-    if (id.west() - west).abs() > 1e-6 || (id.north() - north).abs() > 1e-6 {
+    if !((id.west() - west).abs() <= 1e-6 && (id.north() - north).abs() <= 1e-6) {
         return Err(TileError::Georef(format!(
             "origin {west}, {north} is not a tile corner"
         )));
@@ -553,5 +560,31 @@ mod tests {
         ));
         assert!(Tile::decode(&FIXTURE[..FIXTURE.len() / 2]).is_err());
         assert!(Tile::decode(&[]).is_err());
+    }
+
+    #[test]
+    fn rejects_overflowing_ifd_offset_and_nan_pixel_scale() {
+        // BUG-02: IFD offset near u32::MAX must not overflow usize on 32-bit wasm32.
+        let mut max_ifd = FIXTURE.to_vec();
+        max_ifd[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(Tile::decode(&max_ifd), Err(TileError::Tiff(_))));
+
+        let mut near_max_ifd = FIXTURE.to_vec();
+        near_max_ifd[4..8].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+        assert!(matches!(
+            Tile::decode(&near_max_ifd),
+            Err(TileError::Tiff(_))
+        ));
+
+        // BUG-08: NaN in ModelPixelScale (tag 33550) must be rejected with TileError::Georef.
+        let mut nan_scale = FIXTURE.to_vec();
+        let e = entry_of(&nan_scale, 33550);
+        let scale_off =
+            u32::from_le_bytes(nan_scale[e + 8..e + 12].try_into().unwrap()) as usize;
+        nan_scale[scale_off..scale_off + 8].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(matches!(
+            Tile::decode(&nan_scale),
+            Err(TileError::Georef(_))
+        ));
     }
 }

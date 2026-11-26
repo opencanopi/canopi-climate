@@ -29,6 +29,8 @@ use crate::monthly_precip::{self, MonthlyPrecipLookup, MonthlyPrecipTile, PRECIP
 use crate::phenology::{self, PhenologyLookup, PhenologyTile};
 use crate::regions::{self, RegionsLookup, decode_code, encode_code};
 use crate::soil::{self, SoilLookup, soil_awc, texture_class};
+use crate::soil_plus::{self, SoilPlusLookup};
+use crate::terrain::{self, TerrainLookup, TerrainTile};
 use crate::tile::Tile;
 use crate::water_balance::{self, WaterBalanceLookup, WaterBalanceTile};
 
@@ -50,6 +52,8 @@ pub type FrostCalendarTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a FrostCale
 pub type PhenologyTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a PhenologyTile>;
 /// A `water_balance` tile getter: the decoded tile, or `None` (no file).
 pub type WaterBalanceTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a WaterBalanceTile>;
+/// A `terrain` tile getter: the decoded tile, or `None` (no file).
+pub type TerrainTiles<'a, 'b> = &'b dyn Fn(TileId) -> Option<&'a TerrainTile>;
 
 /// The tile getters of a grid: climate, and each layer (`None`: the grid
 /// has no such layer).
@@ -59,6 +63,8 @@ pub struct Getters<'a, 'b> {
     pub climate: ClimateTiles<'a, 'b>,
     /// Soil tiles.
     pub soil: Option<LayerTiles<'a, 'b>>,
+    /// Deep soil (`soil_plus`) tiles (0.05-degree static).
+    pub soil_plus: Option<LayerTiles<'a, 'b>>,
     /// Regions tiles.
     pub regions: Option<LayerTiles<'a, 'b>>,
     /// Extremes tiles.
@@ -75,6 +81,8 @@ pub struct Getters<'a, 'b> {
     pub phenology: Option<PhenologyTiles<'a, 'b>>,
     /// Water balance tiles (0.1-degree static).
     pub water_balance: Option<WaterBalanceTiles<'a, 'b>>,
+    /// Terrain tiles (0.1-degree static).
+    pub terrain: Option<TerrainTiles<'a, 'b>>,
 }
 
 /// What a reader answers at a point (the CLI's `lookup` JSON).
@@ -84,6 +92,8 @@ pub struct Site {
     pub climate: Option<Lookup>,
     /// Soil, `None` without the layer or with no soil cell near.
     pub soil: Option<SoilLookup>,
+    /// Deep soil (`soil_plus`), `None` without the layer or with no cell near.
+    pub soil_plus: Option<SoilPlusLookup>,
     /// Regions, `None` without the layer.
     pub regions: Option<RegionsLookup>,
     /// Coldest night and hottest day at the climate lookup's cell, `None`
@@ -103,6 +113,8 @@ pub struct Site {
     pub phenology: Option<PhenologyLookup>,
     /// Static water balance (TerraClimate CWD/VPD + ERA5-Land CDD).
     pub water_balance: Option<WaterBalanceLookup>,
+    /// Static terrain (elevation, relief, slope, optional HAND) at the climate cell.
+    pub terrain: Option<TerrainLookup>,
 }
 
 impl Site {
@@ -112,6 +124,7 @@ impl Site {
         json!({
             "climate": self.climate,
             "soil": self.soil,
+            "soil_plus": self.soil_plus,
             "regions": self.regions,
             "extremes": self.extremes,
             "extremes_tail": self.extremes_tail,
@@ -120,6 +133,7 @@ impl Site {
             "monthly_precip": self.monthly_precip,
             "phenology": self.phenology,
             "water_balance": self.water_balance,
+            "terrain": self.terrain,
         })
     }
 
@@ -128,6 +142,7 @@ impl Site {
     pub fn found(&self) -> bool {
         self.climate.is_some()
             || self.soil.is_some()
+            || self.soil_plus.is_some()
             || self.monthly_precip.is_some()
             || self
                 .regions
@@ -152,6 +167,7 @@ impl Site {
         };
         self.climate == other.climate
             && self.soil == other.soil
+            && self.soil_plus == other.soil_plus
             && self.extremes == other.extremes
             && self.extremes_tail == other.extremes_tail
             && self.frost_calendar == other.frost_calendar
@@ -159,6 +175,7 @@ impl Site {
             && self.monthly_precip == other.monthly_precip
             && self.phenology == other.phenology
             && self.water_balance == other.water_balance
+            && self.terrain == other.terrain
             && codes(self) == codes(other)
     }
 }
@@ -216,6 +233,7 @@ pub fn site(
         keep,
         water_balance::at_cell,
     )?;
+    let terrain = at_climate_cell(g.terrain, climate.as_ref(), keep, terrain::at_cell)?;
     let monthly_precip = match g.monthly_precip {
         Some(get) => monthly_precip::lookup_across(
             |id| get(id).filter(|_| keep(id)),
@@ -227,6 +245,15 @@ pub fn site(
     };
     let soil = match g.soil {
         Some(get) => soil::lookup_across(
+            |id| get(id).filter(|_| keep(id)),
+            lat,
+            lon,
+            LAYER_LOOKUP_RADIUS,
+        )?,
+        None => None,
+    };
+    let soil_plus = match g.soil_plus {
+        Some(get) => soil_plus::lookup_across(
             |id| get(id).filter(|_| keep(id)),
             lat,
             lon,
@@ -246,6 +273,7 @@ pub fn site(
     Ok(Site {
         climate,
         soil,
+        soil_plus,
         regions,
         extremes,
         monthly,
@@ -254,6 +282,7 @@ pub fn site(
         frost_calendar,
         phenology,
         water_balance,
+        terrain,
     })
 }
 
@@ -762,6 +791,7 @@ mod tests {
     fn expected_json() -> String {
         let t = synthetic::tile(TileId::parse("n50e000").unwrap());
         let (soil, regions) = (layers::soil(), layers::regions());
+        let soil_plus = crate::soil_plus::synthetic::soil_plus();
         let ext = crate::extremes::synthetic::extremes();
         let ext_tail = crate::extremes_tail::synthetic::extremes_tail();
         let frost = crate::frost_calendar::synthetic::frost_calendar();
@@ -769,8 +799,10 @@ mod tests {
         let mon_p = crate::monthly_precip::synthetic::monthly_precip();
         let pheno = crate::phenology::synthetic::phenology();
         let wb = crate::water_balance::synthetic::water_balance();
+        let tr = crate::terrain::synthetic::terrain();
         let ct = |id: TileId| (id == t.id()).then_some(&t);
         let st = |id: TileId| (id == soil.id()).then_some(&soil);
+        let spt = |id: TileId| (id == soil_plus.id()).then_some(&soil_plus);
         let rt = |id: TileId| (id == regions.id()).then_some(&regions);
         let et = |id: TileId| (id == ext.id()).then_some(&ext);
         let ett = |id: TileId| (id == ext_tail.id()).then_some(&ext_tail);
@@ -779,9 +811,11 @@ mod tests {
         let mpt = |id: TileId| (id == mon_p.id()).then_some(&mon_p);
         let pht = |id: TileId| (id == pheno.id()).then_some(&pheno);
         let wbt = |id: TileId| (id == wb.id()).then_some(&wb);
+        let trt = |id: TileId| (id == tr.id()).then_some(&tr);
         let g = Getters {
             climate: &ct,
             soil: Some(&st),
+            soil_plus: Some(&spt),
             regions: Some(&rt),
             extremes: Some(&et),
             monthly: Some(&mt),
@@ -790,6 +824,7 @@ mod tests {
             frost_calendar: Some(&ft),
             phenology: Some(&pht),
             water_balance: Some(&wbt),
+            terrain: Some(&trt),
         };
         let points: Vec<Value> = points()
             .iter()
@@ -805,6 +840,8 @@ mod tests {
             "phenology": "tests/fixtures/synthetic-phenology-n50e000.tif",
             "water_balance": "tests/fixtures/synthetic-water-balance-n50e000.tif",
             "soil": "tests/fixtures/synthetic-soil-n50e000.tif",
+            "soil_plus": "tests/fixtures/synthetic-soil-plus-n50e000.tif",
+            "terrain": "tests/fixtures/synthetic-terrain-n50e000.tif",
             "regions": "tests/fixtures/synthetic-regions-n50e000.tif",
         });
         to_lines(&[("tiles", tiles)], &points, &tables())

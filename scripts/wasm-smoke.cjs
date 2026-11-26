@@ -261,6 +261,7 @@ for (const p of vectors.points) {
   const got = {
     climate: own ? cc.lookup(bytes, p.lat, p.lon) : null,
     soil: own ? cc.lookupSoil(soilBytes, p.lat, p.lon) : null,
+    soil_plus: own ? cc.lookupSoilPlus(spBytes, p.lat, p.lon) : null,
     regions: own ? cc.lookupRegions(regionsBytes, p.lat, p.lon) : null,
     monthly_precip: own ? cc.lookupMonthlyPrecip(monPBytes, p.lat, p.lon) : null,
   };
@@ -270,6 +271,7 @@ for (const p of vectors.points) {
   got.monthly = got.climate ? cc.lookupMonthly(monBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   got.phenology = got.climate ? cc.lookupPhenology(phenoBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   got.water_balance = got.climate ? cc.lookupWaterBalance(wbBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
+  got.terrain = got.climate ? cc.lookupTerrain(trBytes, got.climate.cell_lat, got.climate.cell_lon) : null;
   assert.deepStrictEqual(got.extremes, p.expect.extremes, `${p.name}: extremes`);
   assert.deepStrictEqual(got.extremes_tail, p.expect.extremes_tail, `${p.name}: extremes_tail`);
   assert.deepStrictEqual(got.frost_calendar, p.expect.frost_calendar, `${p.name}: frost_calendar`);
@@ -277,8 +279,10 @@ for (const p of vectors.points) {
   assert.deepStrictEqual(got.monthly_precip, p.expect.monthly_precip, `${p.name}: monthly_precip`);
   assert.deepStrictEqual(got.phenology, p.expect.phenology, `${p.name}: phenology`);
   assert.deepStrictEqual(got.water_balance, p.expect.water_balance, `${p.name}: water_balance`);
+  assert.deepStrictEqual(got.terrain, p.expect.terrain, `${p.name}: terrain`);
   assert.deepStrictEqual(got.climate, p.expect.climate, `${p.name}: climate`);
   assert.deepStrictEqual(got.soil, p.expect.soil, `${p.name}: soil`);
+  assert.deepStrictEqual(got.soil_plus, p.expect.soil_plus, `${p.name}: soil_plus`);
   if (own) assert.deepStrictEqual(got.regions, p.expect.regions, `${p.name}: regions`);
   else assert.deepStrictEqual([p.expect.regions.wgsrpd_l3, p.expect.regions.iso_a2], [null, null], `${p.name}: regions`);
   compared++;
