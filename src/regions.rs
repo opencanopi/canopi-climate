@@ -45,11 +45,14 @@ pub fn encode_code(code: &str) -> Option<i16> {
     i16::try_from(v).ok()
 }
 
-/// Decode a stored code of `letters` letters; `None` for [`NODATA`] or an
-/// out-of-range value.
+/// Decode a stored code of `letters` letters; `None` for [`NODATA`],
+/// `letters == 0`, overflow, or an out-of-range value.
 #[must_use]
 pub fn decode_code(stored: i16, letters: u32) -> Option<String> {
-    let max = 26i32.pow(letters);
+    if letters == 0 {
+        return None;
+    }
+    let max = 26i32.checked_pow(letters)?;
     let mut v = i32::from(stored);
     if stored == NODATA || v < 0 || v >= max {
         return None;
@@ -90,7 +93,11 @@ pub fn decode(bytes: &[u8]) -> Result<LayerTile, TileError> {
 }
 
 fn has(band: RegionBand) -> impl Fn(&LayerTile, usize) -> bool {
-    move |t, i| t.get(i, band as usize) != NODATA
+    let letters = match band {
+        RegionBand::WgsrpdL3 => 3,
+        RegionBand::IsoA2 => 2,
+    };
+    move |t, i| decode_code(t.get(i, band as usize), letters).is_some()
 }
 
 fn code(found: Option<&Found<'_>>, band: RegionBand, letters: u32) -> Option<String> {
@@ -160,6 +167,10 @@ mod tests {
         assert_eq!(decode_code(NODATA, 2), None);
         assert_eq!(decode_code(676, 2), None);
         assert_eq!(decode_code(-1, 3), None);
+        // BUG-13: letters == 0 and letters >= 7 must return None without panicking.
+        assert_eq!(decode_code(0, 0), None);
+        assert_eq!(decode_code(0, 7), None);
+        assert_eq!(decode_code(0, 100), None);
     }
 
     #[test]
@@ -182,5 +193,16 @@ mod tests {
         let r = lookup(&t, 41.0, 5.0).unwrap();
         assert_eq!((r.wgsrpd_l3, r.iso_a2), (None, None));
         assert!(lookup(&t, 35.0, 5.0).is_err());
+
+        // BUG-13: corrupt out-of-range non-NODATA iso_a2 does not block coastal search.
+        let mut corrupt = vec![NODATA; LAYER_TILE_LEN * REGION_BANDS];
+        let valid_cell = LayerCell::of(43.6, 3.9).unwrap().index_in_tile();
+        let bad_cell = LayerCell::of(43.55, 3.9).unwrap().index_in_tile();
+        corrupt[valid_cell * 2 + 1] = encode_code("FR").unwrap();
+        corrupt[bad_cell * 2 + 1] = 1000; // >= 676: invalid ISO-A2 code
+        let ct = LayerTile::new(id, REGION_BANDS, corrupt).unwrap();
+        let cr = lookup(&ct, 43.55, 3.9).unwrap();
+        assert_eq!(cr.iso_a2.as_deref(), Some("FR"));
+        assert_eq!(cr.iso_a2_distance_cells, Some(1.0));
     }
 }

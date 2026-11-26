@@ -560,6 +560,7 @@ fn validate_header_params(
     close_threshold: f32,
     novel_threshold: f32,
 ) -> Result<(), AnalogueError> {
+    let mut weight_sum = 0.0f32;
     for i in 0..FEATURES {
         if !mean[i].is_finite() || !inv_std[i].is_finite() {
             return Err(AnalogueError::Header(format!(
@@ -572,6 +573,12 @@ fn validate_header_params(
                 weight[i]
             )));
         }
+        weight_sum += weight[i];
+    }
+    if !weight_sum.is_finite() || weight_sum <= 0.0 {
+        return Err(AnalogueError::Header(
+            "feature weight sum must be positive and finite".into(),
+        ));
     }
     if !close_threshold.is_finite() || !novel_threshold.is_finite() {
         return Err(AnalogueError::Header(
@@ -1055,8 +1062,16 @@ mod tests {
         assert!(AnalogueIndex::from_bytes(&nan_mean).is_err());
         assert!(AnalogueIndex::search_bytes(&nan_mean, &base_q, &SearchOptions::default()).is_err());
 
-        let mut nan_thresh = bytes;
+        let mut nan_thresh = bytes.clone();
         nan_thresh[112..116].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(AnalogueIndex::from_bytes(&nan_thresh).is_err());
+
+        // Zero weight sum is also rejected.
+        let mut zero_w = bytes;
+        for i in 0..FEATURES {
+            zero_w[80 + i * 4..84 + i * 4].copy_from_slice(&0.0f32.to_le_bytes());
+        }
+        assert!(AnalogueIndex::from_bytes(&zero_w).is_err());
+        assert!(AnalogueIndex::search_bytes(&zero_w, &base_q, &SearchOptions::default()).is_err());
     }
 }

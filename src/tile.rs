@@ -251,7 +251,7 @@ fn check_layout<R: std::io::Read + std::io::Seek>(
         return layout(format!("{samples} bands, expected {bands}"));
     }
     let bits = d.find_tag_unsigned_vec::<u64>(Tag::BitsPerSample)?;
-    if bits.is_none_or(|b| b.iter().any(|&x| x != 16)) {
+    if bits.is_none_or(|b| b.is_empty() || b.iter().any(|&x| x != 16)) {
         return layout("samples are not 16-bit".into());
     }
     let format = d.find_tag_unsigned_vec::<u64>(Tag::SampleFormat)?;

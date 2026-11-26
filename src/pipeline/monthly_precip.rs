@@ -235,7 +235,7 @@ fn write_precip_tiles(out: &Path, bands: &[Vec<i16>]) -> Result<Vec<TileSpec>> {
             let mut count = 0u32;
             for j in 0..PRECIP_TILE_LEN {
                 let g = LayerGrid::QUARTER_DEG.global_index(LayerGrid::QUARTER_DEG.in_tile(id, j));
-                if bands[0][g] == NODATA {
+                if bands.iter().any(|b| b[g] == NODATA) {
                     continue;
                 }
                 count += 1;

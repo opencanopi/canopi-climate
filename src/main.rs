@@ -334,19 +334,36 @@ fn analogues_cmd(
             climate.periods.len()
         )));
     };
-    let srf = match (&site.monthly, &site.monthly_precip) {
+    let (srf, seasonality_fallback) = match (&site.monthly, &site.monthly_precip) {
         (Some(m), Some(p)) => {
-            let m_slot = canopi_climate::monthly::MONTHLY_SLOT_INDICES
+            if let Some(m_slot) = canopi_climate::monthly::MONTHLY_SLOT_INDICES
                 .iter()
                 .position(|&idx| idx == slot)
-                .unwrap_or(0);
-            f64::from(canopi_climate::pipeline::analogues::summer_rain_fraction(
-                &m.periods[m_slot].tmean_c,
-                &p.periods[m_slot].precip_mm,
-            ))
+            {
+                (
+                    f64::from(canopi_climate::pipeline::analogues::summer_rain_fraction(
+                        &m.periods[m_slot].tmean_c,
+                        &p.periods[m_slot].precip_mm,
+                    )),
+                    false,
+                )
+            } else {
+                eprintln!(
+                    "warning: slot {slot} ({} {}) has no monthly layer; falling back to historical summer_rain_frac",
+                    period.period, period.scenario
+                );
+                (
+                    f64::from(canopi_climate::pipeline::analogues::summer_rain_fraction(
+                        &m.periods[0].tmean_c,
+                        &p.periods[0].precip_mm,
+                    )),
+                    true,
+                )
+            }
         }
-        _ => 0.5,
+        _ => (0.5, true),
     };
+    let _ = seasonality_fallback;
     let query = canopi_climate::analogues::AnalogueQuery {
         lat,
         lon,

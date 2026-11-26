@@ -316,7 +316,9 @@ read at the climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `tmin_p10_gap_
 read at the climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `regime` (`"seasonal"`,
 `"frost_free"`, or `"year_round"`), `last_spring_frost_doy` (`Option<u16>`, `null` when sentinel `0`
 or `366`), `last_spring_frost_p90_doy` (`Option<u16>`), `first_autumn_frost_doy` (`Option<u16>`),
-`frost_free_days` (`u16`), `frost_year_pct` (`u8`), `false_spring_pct` (`u8`).
+`frost_free_days` (`u16`), `frost_year_pct` (`u8`), `false_spring_pct` (`u8`). Note: from `v0.7.1`,
+`microclimate::FrostDates` uses the same `Option<u16>` schema (serializing `null` for frost-free /
+year-round regimes while still accepting legacy `0` and `366` sentinels on input).
 
 **Phenology answer** (`phenology::at_cell`; WebAssembly `lookupPhenology`): no search; read at the
 climate cell. Fields: `cell_lat`, `cell_lon`, `tile`, `chill_portions_0c`, `chill_portions_1c`,
@@ -547,11 +549,11 @@ monolithic tar or assembled from packs:
 
 | Pack id | Contents |
 |---|---|
-| `core` | `manifest.json`, `ATTRIBUTION.md`, `build-report.json`, `SHA256SUMS.pack`, `tiles/`, `soil/`, `regions/`, `extremes/` |
-| `monthly` | `SHA256SUMS.pack`, `monthly/`, `monthly_precip/` |
-| `v05` | `SHA256SUMS.pack`, `extremes_tail/`, `frost_calendar/`, `analogues.bin` |
-| `v06` | `SHA256SUMS.pack`, `phenology/`, `water_balance/` |
-| `v07` | `SHA256SUMS.pack`, `soil_plus/`, `terrain/` |
+| `core` | `manifest.json`, `ATTRIBUTION.md`, `build-report.json`, `SHA256SUMS.core`, `tiles/`, `soil/`, `regions/`, `extremes/` |
+| `monthly` | `SHA256SUMS.monthly`, `monthly/`, `monthly_precip/` |
+| `v05` | `SHA256SUMS.v05`, `extremes_tail/`, `frost_calendar/`, `analogues.bin` |
+| `v06` | `SHA256SUMS.v06`, `phenology/`, `water_balance/` |
+| `v07` | `SHA256SUMS.v07`, `soil_plus/`, `terrain/` |
 
 Top-level fields in `packs-vX.Y.Z.json`: `format` (`"canopi-climate-packs"`), `format_version`
 (`1`), `version`, `manifest_sha256`, `climate_tiles_sha256`, and `packs[]`. Each entry in `packs[]`

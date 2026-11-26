@@ -294,9 +294,14 @@ pub struct SoilLookup {
 /// Whether a soil cell has values (measured or filled).
 #[must_use]
 pub fn has_soil(tile: &LayerTile, index: usize) -> bool {
-    [SoilBand::PhH2o, SoilBand::Sand, SoilBand::Clay]
-        .iter()
-        .all(|b| tile.get(index, *b as usize) != NODATA)
+    [
+        SoilBand::PhH2o,
+        SoilBand::Sand,
+        SoilBand::Clay,
+        SoilBand::FillDistance,
+    ]
+    .iter()
+    .all(|b| tile.get(index, *b as usize) != NODATA)
 }
 
 /// Decode a soil tile file.
@@ -470,5 +475,17 @@ mod tests {
         assert_eq!(soil_awc(-1.0, 20.0, None), None);
         assert_eq!(soil_awc(40.0, 20.0, Some(-1.0)), None);
         assert_eq!(soil_awc(f64::NAN, 20.0, None), None);
+    }
+
+    #[test]
+    fn has_soil_requires_valid_fill_distance() {
+        let id = TileId::parse("n50e000").unwrap();
+        let mut data = vec![NODATA; crate::layer::LAYER_TILE_LEN * SOIL_BANDS];
+        data[0] = 65;
+        data[1] = 400;
+        data[2] = 200;
+        // FillDistance left as NODATA -> cell must not count as valid soil.
+        let t = LayerTile::new(id, SOIL_BANDS, data).unwrap();
+        assert!(!has_soil(&t, 0));
     }
 }

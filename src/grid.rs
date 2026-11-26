@@ -140,24 +140,27 @@ impl TileId {
         format!("{self}.tif")
     }
 
-    /// Parse a tile name (`n50e000`, with or without `.tif`).
+    /// Parse a canonical tile name (`n50e000`, with or without `.tif`).
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
         let name = name.strip_suffix(".tif").unwrap_or(name);
         let b = name.as_bytes();
-        if b.len() != 7 || !name.is_ascii() {
+        if b.len() != 7
+            || !b[1..3].iter().all(u8::is_ascii_digit)
+            || !b[4..7].iter().all(u8::is_ascii_digit)
+        {
             return None;
         }
         let lat: i32 = name.get(1..3)?.parse().ok()?;
         let lon: i32 = name.get(4..7)?.parse().ok()?;
         let north = match b[0] {
             b'n' => lat,
-            b's' => -lat,
+            b's' if lat > 0 => -lat,
             _ => return None,
         };
         let west = match b[3] {
             b'e' => lon,
-            b'w' => -lon,
+            b'w' if lon > 0 => -lon,
             _ => return None,
         };
         if north % 10 != 0 || west % 10 != 0 || !(-80..=90).contains(&north) {
@@ -293,5 +296,16 @@ mod tests {
         let t = c.tile();
         assert_eq!(t.cell(c.index_in_tile()), c);
         assert_eq!(c.global_index(), c.row * GRID_W + c.col);
+    }
+
+    #[test]
+    fn tile_id_parse_rejects_non_canonical_and_signed_names() {
+        for bad in [
+            "s00e000", "n00w000", "s00w000", "n50e-10", "n+0e+00", "n-0e000", "n50e+10",
+        ] {
+            assert_eq!(TileId::parse(bad), None, "{bad} must be rejected");
+        }
+        assert!(TileId::parse("n00e000").is_some());
+        assert!(TileId::parse("s80w180").is_some());
     }
 }

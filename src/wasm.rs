@@ -326,6 +326,32 @@ pub fn soil_awc_js(sand_pct: f64, clay_pct: f64, om_pct: Option<f64>) -> Result<
     }
 }
 
+/// Compute Saxton & Rawls (2006) soil Available Water Capacity discounted for
+/// coarse fragments (`cfvo_0_30_pct` for 0–30 cm topsoil and `cfvo_30_100_pct`
+/// for 30–100 cm subsoil, in vol %), or `null` if out of domain.
+///
+/// # Errors
+/// Throws only on serialization failure.
+#[wasm_bindgen(js_name = soilAwcWithRock)]
+pub fn soil_awc_with_rock_js(
+    sand_pct: f64,
+    clay_pct: f64,
+    om_pct: Option<f64>,
+    cfvo_0_30_pct: Option<f64>,
+    cfvo_30_100_pct: Option<f64>,
+) -> Result<JsValue, JsError> {
+    match crate::soil::soil_awc_with_rock(
+        sand_pct,
+        clay_pct,
+        om_pct,
+        cfvo_0_30_pct,
+        cfvo_30_100_pct,
+    ) {
+        Some(a) => to_js(&a),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 /// Decode a `soil_plus` tile (0.05-degree, 6 bands) and look a point up.
 /// Returns [`crate::soil_plus::SoilPlusLookup`] as a plain object, or `null`.
 ///

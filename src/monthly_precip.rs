@@ -235,7 +235,7 @@ fn decode_lookup(
         lon,
         cell_lat: round6(grid.center_lat(cell)),
         cell_lon: round6(grid.center_lon(cell)),
-        distance_cells: (distance_cells * 1e4).round() / 1e4,
+        distance_cells,
         tile: raster.id().name(),
         periods,
     }

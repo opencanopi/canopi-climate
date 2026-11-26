@@ -143,19 +143,28 @@ fn write_ustar_entry(w: &mut impl Write, rel_path: &str, bytes: &[u8]) -> std::i
     Ok(())
 }
 
-fn collect_dir_files(grid_dir: &Path, sub: &str) -> Result<Vec<(String, PathBuf)>> {
-    let dir = grid_dir.join(sub);
-    if !dir.is_dir() {
+fn collect_manifest_files(
+    grid_dir: &Path,
+    manifest: &crate::manifest::Manifest,
+    dir_name: &str,
+) -> Result<Vec<(String, PathBuf)>> {
+    let tile_paths: Vec<&str> = if dir_name == "tiles" {
+        manifest.tiles.iter().map(|t| t.path.as_str()).collect()
+    } else if let Some(layer) = manifest.layers.iter().find(|l| l.id == dir_name) {
+        layer.tiles.iter().map(|t| t.path.as_str()).collect()
+    } else {
         return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| PipelineError::io(&dir, e))? {
-        let entry = entry.map_err(|e| PipelineError::io(&dir, e))?;
-        let path = entry.path();
-        if path.is_file() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            out.push((format!("{sub}/{name}"), path));
+    };
+    let mut out = Vec::with_capacity(tile_paths.len());
+    for rel in tile_paths {
+        let abs = grid_dir.join(rel);
+        if !abs.is_file() {
+            return Err(PipelineError::Data(format!(
+                "manifest tile missing on disk: {}",
+                abs.display()
+            )));
         }
+        out.push((rel.to_string(), abs));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
@@ -188,7 +197,7 @@ pub fn pack_grid(grid_dir: &Path, out_dir: &Path, version: &str) -> Result<Packs
             }
         }
         for &dir_name in def.dirs {
-            let dir_files = collect_dir_files(grid_dir, dir_name)?;
+            let dir_files = collect_manifest_files(grid_dir, &manifest, dir_name)?;
             if !dir_files.is_empty() {
                 if dir_name != "tiles" {
                     present_layers.push(dir_name.to_string());
@@ -224,7 +233,8 @@ pub fn pack_grid(grid_dir: &Path, out_dir: &Path, version: &str) -> Result<Packs
             write_ustar_entry(&mut writer, rel, &bytes)
                 .map_err(|e| PipelineError::io(&archive_path, e))?;
         }
-        write_ustar_entry(&mut writer, "SHA256SUMS.pack", sums.as_bytes())
+        let sums_name = format!("SHA256SUMS.{}", def.id);
+        write_ustar_entry(&mut writer, &sums_name, sums.as_bytes())
             .map_err(|e| PipelineError::io(&archive_path, e))?;
         // Two 512-byte zero blocks terminate a POSIX tar archive.
         writer
@@ -305,6 +315,44 @@ mod tests {
         out
     }
 
+    fn dummy_layer(
+        id: &str,
+        cell_deg: f64,
+        tile_cells: u32,
+        bands: u32,
+        path: &str,
+        payload: &[u8],
+    ) -> crate::manifest::LayerSpec {
+        crate::manifest::LayerSpec {
+            id: id.into(),
+            description: id.into(),
+            cell_deg,
+            tile_cells,
+            directory: id.into(),
+            encoding: Encoding {
+                container: "cog".into(),
+                sample_format: "int16".into(),
+                nodata: -32768,
+                compression: "deflate".into(),
+                interleave: "pixel".into(),
+                bands,
+                band_order: "band".into(),
+            },
+            bands: Vec::new(),
+            slots: Vec::new(),
+            version: None,
+            sources: Vec::new(),
+            tiles: vec![TileSpec {
+                name: "n50e000".into(),
+                path: path.into(),
+                bytes: payload.len() as u64,
+                sha256: sha256_bytes(payload),
+                complete_cells: 1,
+            }],
+            notes: Vec::new(),
+        }
+    }
+
     #[test]
     fn pack_grid_round_trips_and_avoids_manifest_hash_cycle() {
         let tmp = std::env::temp_dir().join(format!("canopi-pack-test-{}", std::process::id()));
@@ -347,7 +395,17 @@ mod tests {
                 sha256: sha256_bytes(b"tile"),
                 complete_cells: 1,
             }],
-            layers: Vec::new(),
+            layers: vec![
+                dummy_layer(
+                    "soil_plus",
+                    0.05,
+                    200,
+                    6,
+                    "soil_plus/n50e000.tif",
+                    b"soilplus",
+                ),
+                dummy_layer("terrain", 0.1, 100, 4, "terrain/n50e000.tif", b"terrain"),
+            ],
             dry_month_rule: None,
             climate_tiles_sha256: Some("abc123".into()),
             analogues: None,
@@ -356,6 +414,7 @@ mod tests {
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
         fs::write(grid_dir.join("manifest.json"), &manifest_bytes).unwrap();
         fs::write(grid_dir.join("tiles/n50e000.tif"), b"tile").unwrap();
+        fs::write(grid_dir.join("tiles/stray.tmp"), b"stray").unwrap();
         fs::write(grid_dir.join("soil_plus/n50e000.tif"), b"soilplus").unwrap();
         fs::write(grid_dir.join("terrain/n50e000.tif"), b"terrain").unwrap();
 
@@ -368,7 +427,7 @@ mod tests {
         assert_eq!(index.packs[0].id, "core");
         assert_eq!(index.packs[1].id, "v07");
 
-        // Verify ustar contents of core and v07 packs
+        // Verify ustar contents of core and v07 packs (stray files excluded, unique SHA256SUMS.<id>)
         let core_bytes = fs::read(out_dir.join(&index.packs[0].file)).unwrap();
         assert_eq!(sha256_bytes(&core_bytes), index.packs[0].sha256);
         let core_entries = list_ustar_entries(&core_bytes);
@@ -377,6 +436,8 @@ mod tests {
             .find(|(n, _)| n == "manifest.json")
             .unwrap();
         assert_eq!(manifest_in_tar.1, manifest_bytes);
+        assert!(core_entries.iter().any(|(n, _)| n == "SHA256SUMS.core"));
+        assert!(!core_entries.iter().any(|(n, _)| n.contains("stray.tmp")));
 
         let v07_bytes = fs::read(out_dir.join(&index.packs[1].file)).unwrap();
         let v07_entries = list_ustar_entries(&v07_bytes);
@@ -386,7 +447,7 @@ mod tests {
                 .any(|(n, _)| n == "soil_plus/n50e000.tif")
         );
         assert!(v07_entries.iter().any(|(n, _)| n == "terrain/n50e000.tif"));
-        assert!(v07_entries.iter().any(|(n, _)| n == "SHA256SUMS.pack"));
+        assert!(v07_entries.iter().any(|(n, _)| n == "SHA256SUMS.v07"));
 
         let _ = fs::remove_dir_all(&tmp);
     }

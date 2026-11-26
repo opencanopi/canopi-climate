@@ -504,8 +504,11 @@ impl Grid {
     ) -> Result<()> {
         let bad = |e: crate::lookup::LookupError| PipelineError::Data(format!("{lat}, {lon}: {e}"));
         let ids = crate::layer::search_tiles(lat, lon, radius).map_err(bad)?;
-        if self.layer_cache.len() + ids.len() > CACHE_LAYER_TILES {
-            self.layer_cache.clear();
+        let count_for_layer = self.layer_cache.keys().filter(|(k, _)| k == id).count();
+        if count_for_layer + ids.len() > CACHE_LAYER_TILES {
+            // Evict only this layer's tiles so multi-layer lookups (`Grid::site`)
+            // cannot evict tiles just loaded for another layer (`soil` vs `soil_plus`).
+            self.layer_cache.retain(|(k, _), _| k != id);
         }
         for t in ids {
             let key = (id.to_string(), t);
@@ -670,7 +673,15 @@ impl Grid {
         let sums_path = self.dir.join("SHA256SUMS");
         let text = match std::fs::read_to_string(&sums_path) {
             Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Real release grids include ATTRIBUTION.md / build-report.json alongside SHA256SUMS.
+                if self.dir.join("ATTRIBUTION.md").is_file()
+                    || self.dir.join("build-report.json").is_file()
+                {
+                    problems.push("missing SHA256SUMS".into());
+                }
+                return Ok(());
+            }
             Err(e) => return Err(PipelineError::io(&sums_path, e)),
         };
         let mut sums: HashMap<&str, &str> = HashMap::new();
@@ -687,14 +698,19 @@ impl Grid {
                 problems.push(format!("SHA256SUMS: duplicate entry for {path}"));
             }
         }
-        // Verify manifest.json itself matches SHA256SUMS.
-        match sums.get("manifest.json") {
-            None => problems.push("SHA256SUMS: missing manifest.json".into()),
-            Some(&expected) => {
-                let mpath = self.dir.join("manifest.json");
-                let bytes = std::fs::read(&mpath).map_err(|e| PipelineError::io(&mpath, e))?;
-                if super::sha256_bytes(&bytes) != expected {
-                    problems.push("SHA256SUMS: manifest.json checksum mismatch".into());
+        // Verify manifest.json and optional release metadata files match SHA256SUMS.
+        for meta in ["manifest.json", "build-report.json", "ATTRIBUTION.md"] {
+            let mpath = self.dir.join(meta);
+            if meta != "manifest.json" && !mpath.is_file() {
+                continue;
+            }
+            match sums.get(meta) {
+                None => problems.push(format!("SHA256SUMS: missing {meta}")),
+                Some(&expected) => {
+                    let bytes = std::fs::read(&mpath).map_err(|e| PipelineError::io(&mpath, e))?;
+                    if super::sha256_bytes(&bytes) != expected {
+                        problems.push(format!("SHA256SUMS: {meta} checksum mismatch"));
+                    }
                 }
             }
         }
@@ -1825,5 +1841,44 @@ mod tests {
             problems.iter().any(|p| p.contains("SHA256SUMS")),
             "expected SHA256SUMS problem, got {problems:?}"
         );
+    }
+
+    #[test]
+    fn site_layer_cache_does_not_evict_other_layers() {
+        // Pre-fill layer_cache for "regions" up to CACHE_LAYER_TILES so loading "regions"
+        // inside Grid::site triggers eviction; "soil" tiles loaded just before must survive.
+        let dir = grid_dir_with_regions("cache-isolation");
+        let path = dir.join("manifest.json");
+        let mut m: Manifest =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        std::fs::create_dir_all(dir.join("soil")).unwrap();
+        let st = crate::layer::synthetic::soil();
+        let rel = format!("soil/{}", st.id().file_name());
+        let bytes = cog::write_layer_tile_checked(&st, &dir.join(&rel)).unwrap();
+        let sspec = crate::manifest::TileSpec {
+            name: st.id().name(),
+            path: rel,
+            bytes: bytes.len() as u64,
+            sha256: crate::pipeline::sha256_bytes(&bytes),
+            complete_cells: 0,
+        };
+        m.layers.push(crate::pipeline::soil::layer_spec(vec![sspec]));
+        std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
+
+        let mut g = Grid::open(&dir).unwrap();
+        let dummy_reg = crate::layer::synthetic::regions();
+        for (idx, tid) in TileId::all().take(CACHE_LAYER_TILES).enumerate() {
+            if tid != dummy_reg.id() {
+                let _ = idx;
+                g.layer_cache
+                    .insert(("regions".to_string(), tid), dummy_reg.clone());
+            }
+        }
+        let site = g.site(45.25, 3.25, 2, false).unwrap();
+        assert!(
+            site.soil.is_some(),
+            "soil tile must not be evicted when regions layer overflows its cache"
+        );
+        assert!(site.regions.is_some());
     }
 }

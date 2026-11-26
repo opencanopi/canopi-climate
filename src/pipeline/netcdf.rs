@@ -227,10 +227,13 @@ fn parse_fill(b: &[u8], v: &mut NcVar) {
     // Fill value message v3: version, flags, then size (u32) and value if
     // flag bit 5 is set.
     if b.first() == Some(&3) && b.get(1).is_some_and(|f| f & 0x20 != 0) && u32_at(b, 2) == Some(4) {
-        v.fill = b
-            .get(6..10)
-            .and_then(|s| s.try_into().ok())
-            .map(f32::from_le_bytes);
+        v.fill = b.get(6..10).and_then(|s| s.try_into().ok()).map(|arr| {
+            if v.big_endian {
+                f32::from_be_bytes(arr)
+            } else {
+                f32::from_le_bytes(arr)
+            }
+        });
     }
 }
 
@@ -454,7 +457,7 @@ pub fn read_var_f32(path: &Path, v: &NcVar) -> Result<Vec<f32>> {
     }
     for item in decoded {
         let (off, raw) = item?;
-        place_chunk(&mut out, &raw, &off, &cd, &dims, &strides);
+        place_chunk(&mut out, &raw, &off, &cd, &dims, &strides, v.big_endian);
     }
     Ok(out)
 }
@@ -467,6 +470,7 @@ fn place_chunk(
     cd: &[usize],
     dims: &[usize],
     strides: &[usize],
+    big_endian: bool,
 ) {
     let nd = dims.len();
     let last = nd - 1;
@@ -490,7 +494,12 @@ fn place_chunk(
         for j in 0..n {
             let s = (src + j) * 4;
             if let (Some(b), Some(o)) = (raw.get(s..s + 4), out.get_mut(dst + j)) {
-                *o = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                let arr = [b[0], b[1], b[2], b[3]];
+                *o = if big_endian {
+                    f32::from_be_bytes(arr)
+                } else {
+                    f32::from_le_bytes(arr)
+                };
             }
         }
     }
@@ -583,12 +592,19 @@ mod tests {
         let cd = [2usize, 4];
         let mut out = vec![0f32; 15];
         let raw: Vec<u8> = (1..=8).flat_map(|i| (i as f32).to_le_bytes()).collect();
-        place_chunk(&mut out, &raw, &[0, 0], &cd, &dims, &strides);
-        place_chunk(&mut out, &raw, &[2, 4], &cd, &dims, &strides);
+        place_chunk(&mut out, &raw, &[0, 0], &cd, &dims, &strides, false);
+        place_chunk(&mut out, &raw, &[2, 4], &cd, &dims, &strides, false);
         assert_eq!(&out[0..4], &[1., 2., 3., 4.]);
         assert_eq!(&out[5..9], &[5., 6., 7., 8.]);
         assert_eq!(out[14], 1.0);
         assert_eq!(out[4], 0.0);
+
+        // BUG-20: big-endian f32 chunks decode correctly when big_endian == true.
+        let mut out_be = vec![0f32; 15];
+        let raw_be: Vec<u8> = (1..=8).flat_map(|i| (i as f32).to_be_bytes()).collect();
+        place_chunk(&mut out_be, &raw_be, &[0, 0], &cd, &dims, &strides, true);
+        assert_eq!(&out_be[0..4], &[1., 2., 3., 4.]);
+        assert_eq!(&out_be[5..9], &[5., 6., 7., 8.]);
     }
 
     #[test]

@@ -196,6 +196,20 @@ pub fn run(cfg: &BuildConfig) -> Result<Value> {
     let ph1 = load_sub(&cfg.sources, "phh2o")?;
     let clay1 = load_sub(&cfg.sources, "clay")?;
 
+    for (name, s) in [
+        ("bdod_0_30", &bdod0),
+        ("cfvo_0_30", &cfvo0),
+        ("cfvo_30_100", &cfvo1),
+        ("ph_30_100", &ph1),
+        ("clay_30_100", &clay1),
+    ] {
+        if (s.width, s.height, s.geo) != (soc0.width, soc0.height, soc0.geo) {
+            return Err(PipelineError::Data(format!(
+                "{DIR}: raster {name} grid ({}x{}, {:?}) does not match soc_0_30 ({}x{}, {:?})",
+                s.width, s.height, s.geo, soc0.width, soc0.height, soc0.geo
+            )));
+        }
+    }
     let map = pixel_map(&soc0)?;
     // Native SoilGrids units -> decoded units:
     // soc: dg/kg -> g/kg (* 0.1); bdod: cg/cm3 -> g/cm3 (* 0.01);

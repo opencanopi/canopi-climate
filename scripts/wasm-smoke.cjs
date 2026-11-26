@@ -182,6 +182,10 @@ assert.equal(cc.photoperiod(91), null);
 
 const awcLoam = cc.soilAwc(40, 20, undefined);
 assert.ok(awcLoam.awc_30cm_mm >= 35 && awcLoam.awc_30cm_mm <= 60);
+const awcRock = cc.soilAwcWithRock(40, 20, 4.0, 20, 35);
+assert.ok(awcRock.awc_30cm_mm < awcLoam.awc_30cm_mm);
+assert.ok(awcRock.awc_100cm_mm < awcLoam.awc_100cm_mm);
+assert.equal(cc.soilAwcWithRock(40, 20, undefined, 150, undefined), null);
 const awcSand = cc.soilAwc(100, 0, 0);
 assert.ok(awcSand.wilting_point >= 0.01);
 assert.equal(cc.soilAwc(70, 40, undefined), null);

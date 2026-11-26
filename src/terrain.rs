@@ -215,8 +215,8 @@ pub fn at_cell(
         tile: tile.id().name(),
         elev_m: elev.round() as i16,
         relief_m: relief.max(0.0).round() as u16,
-        slope_deg: slope,
-        hand_m: hand,
+        slope_deg: slope.max(0.0),
+        hand_m: hand.map(|h| h.max(0.0)),
     }))
 }
 
@@ -294,5 +294,19 @@ mod tests {
 
         // Sea cell returns None
         assert!(at_cell(&tile, 40.55, 0.55).unwrap().is_none());
+
+        // BUG-15: negative corrupt slope_deg and hand_m clamp to >= 0.0 on decode.
+        let id = TileId::parse("n50e000").unwrap();
+        let mut data = vec![NODATA; TILE_LEN * TERRAIN_BANDS];
+        data[0] = -10; // elev_m (negative allowed)
+        data[1] = -5; // relief_m -> 0
+        data[2] = -25; // slope_deg -> 0.0
+        data[3] = -40; // hand_m -> 0.0
+        let corrupt = TerrainTile::new(id, data).unwrap();
+        let res = at_cell(&corrupt, 49.95, 0.05).unwrap().unwrap();
+        assert_eq!(res.elev_m, -10);
+        assert_eq!(res.relief_m, 0);
+        assert_eq!(res.slope_deg, 0.0);
+        assert_eq!(res.hand_m, Some(0.0));
     }
 }

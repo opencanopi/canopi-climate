@@ -7,9 +7,9 @@ use serde::Serialize;
 use crate::koppen;
 use crate::model::{ARIDITY_CAP, ARIDITY_MIN_PET_MM};
 
-/// Mid-month day of year, January first.
-const MID_MONTH_DOY: [f64; 12] = [
-    15., 46., 75., 105., 135., 162., 198., 228., 258., 288., 318., 344.,
+/// Mid-month day of year (1-based, 365-day calendar), January first.
+pub const MID_MONTH_DOY: [f64; 12] = [
+    15.5, 45.0, 74.5, 105.0, 135.5, 166.0, 196.5, 227.5, 258.0, 288.5, 319.0, 349.5,
 ];
 /// Mean days per month (February averaged over leap years).
 const DAYS_IN_MONTH: [f64; 12] = [31., 28.25, 31., 30., 31., 30., 31., 31., 30., 31., 30., 31.];

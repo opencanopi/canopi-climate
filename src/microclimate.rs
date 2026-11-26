@@ -19,7 +19,7 @@ use std::f64::consts::PI;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::derived::{chill_months, gdd_base_10};
+use crate::derived::{MID_MONTH_DOY, chill_months, gdd_base_10};
 use crate::extremes::usda_zone;
 
 /// Environmental temperature lapse rate (°C per metre of elevation gain).
@@ -39,11 +39,6 @@ pub const DIFFUSE_FRACTION: f64 = 0.25;
 
 /// Frost-date shift per °C of nighttime temperature change (days / °C).
 pub const FROST_DAYS_PER_C: f64 = 3.5;
-
-/// Mid-month day-of-year (matching `src/derived.rs`).
-const MID_MONTH_DOY: [f64; 12] = [
-    15.5, 45.0, 74.5, 105.0, 135.5, 166.0, 196.5, 227.5, 258.0, 288.5, 319.0, 349.5,
-];
 
 /// Errors returned by [`adjust`].
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -255,7 +250,7 @@ pub struct MicroclimateAdjustment {
     pub monthly_tmin_c: Option<[f64; 12]>,
     /// Re-derived Growing Degree Days (base 10 °C), if monthly `tmean` supplied.
     pub gdd_base_10: Option<f64>,
-    /// Re-derived chill months (`tmean < 7.2 °C`), if monthly `tmean` supplied.
+    /// Re-derived chill months (`0.0 < tmean <= 7.2 °C`), if monthly `tmean` supplied.
     pub chill_months: Option<u8>,
     /// Re-derived Dynamic Chill Portions from the 5-band sensitivity curve, if supplied.
     pub chill_portions: Option<f64>,

@@ -248,7 +248,7 @@ fn band(id: &str, unit: &str, scale: f32, description: &str) -> VariableSpec {
     }
 }
 
-fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
+pub(crate) fn layer_spec(tiles: Vec<crate::manifest::TileSpec>) -> LayerSpec {
     LayerSpec {
         id: "soil".into(),
         description: format!(
@@ -367,6 +367,14 @@ pub fn stage_soil(cfg: &BuildConfig) -> Result<()> {
     let vars: [Source; 3] = combined
         .try_into()
         .map_err(|_| PipelineError::Data("three SoilGrids variables".into()))?;
+    for (idx, v) in vars.iter().enumerate().skip(1) {
+        if (v.width, v.height, v.geo) != (vars[0].width, vars[0].height, vars[0].geo) {
+            return Err(PipelineError::Data(format!(
+                "soil: raster {} grid ({}x{}, {:?}) does not match {} ({}x{}, {:?})",
+                VARIABLES[idx], v.width, v.height, v.geo, VARIABLES[0], vars[0].width, vars[0].height, vars[0].geo
+            )));
+        }
+    }
     let map = pixel_map(&vars[0])?;
     let Measured { mut bands } = sample(&map, &vars);
     drop(vars);

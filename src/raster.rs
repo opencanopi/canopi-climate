@@ -47,10 +47,10 @@ impl LayerGrid {
         TILE_DEG / self.tile_cells as f64
     }
 
-    /// Cells per tile (`tile_cells * tile_cells`).
+    /// Cells per tile (`tile_cells * tile_cells`, saturating on overflow).
     #[must_use]
     pub const fn tile_len(self) -> usize {
-        self.tile_cells * self.tile_cells
+        self.tile_cells.saturating_mul(self.tile_cells)
     }
 
     /// Global grid width in cells.
@@ -169,7 +169,16 @@ impl Raster {
         bands: usize,
         data: Vec<i16>,
     ) -> Result<Self, TileError> {
-        let expected = grid.tile_len() * bands;
+        let Some(expected) = grid
+            .tile_cells
+            .checked_mul(grid.tile_cells)
+            .and_then(|n| n.checked_mul(bands))
+        else {
+            return Err(TileError::Layout(format!(
+                "tile size overflow for {} cells x {bands} bands",
+                grid.tile_cells
+            )));
+        };
         if bands == 0 || data.len() != expected {
             return Err(TileError::Layout(format!(
                 "{} values for {bands} bands (expected {expected})",
@@ -214,9 +223,13 @@ impl Raster {
     /// All bands of a cell (row-major index inside the tile), or `&[]` if out of range.
     #[must_use]
     pub fn pixel(&self, index: usize) -> &[i16] {
-        self.data
-            .get(index * self.bands..(index + 1) * self.bands)
-            .unwrap_or(&[])
+        let Some(start) = index.checked_mul(self.bands) else {
+            return &[];
+        };
+        let Some(end) = start.checked_add(self.bands) else {
+            return &[];
+        };
+        self.data.get(start..end).unwrap_or(&[])
     }
 
     /// One stored value; [`NODATA`] outside the tile or band range.
@@ -225,9 +238,10 @@ impl Raster {
         if band >= self.bands {
             return NODATA;
         }
-        self.data
-            .get(index * self.bands + band)
-            .copied()
+        index
+            .checked_mul(self.bands)
+            .and_then(|start| start.checked_add(band))
+            .and_then(|at| self.data.get(at).copied())
             .unwrap_or(NODATA)
     }
 
@@ -413,5 +427,10 @@ mod tests {
         .unwrap();
         assert_eq!((f.cell, f.distance_cells), (target, 1.0));
         assert_eq!(f.raster.id(), east);
+
+        // BUG-14: huge index must not overflow in pixel() or get().
+        assert!(r.pixel(usize::MAX).is_empty());
+        assert_eq!(r.get(usize::MAX, 0), NODATA);
+        assert_eq!(LayerGrid::new(usize::MAX).unwrap().tile_len(), usize::MAX);
     }
 }

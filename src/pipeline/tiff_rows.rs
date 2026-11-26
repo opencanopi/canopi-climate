@@ -329,9 +329,14 @@ impl TiffRows {
             .info
             .geo
             .ok_or_else(|| PipelineError::Raster("no georeferencing".into()))?;
+        if !lat.is_finite() || !lon.is_finite() {
+            return Err(PipelineError::Raster("non-finite coordinate".into()));
+        }
         let col = ((lon - x0) / pw).floor();
         let row = ((lat - y0) / ph).floor();
-        if col < 0.0
+        if !col.is_finite()
+            || !row.is_finite()
+            || col < 0.0
             || row < 0.0
             || col >= f64::from(self.info.width)
             || row >= f64::from(self.info.height)
@@ -400,6 +405,9 @@ mod tests {
                 f32::from(data[69 * w + 299])
             );
             assert!(r.sample(0.0, 0.0).is_err());
+            assert!(r.sample(f64::NAN, 0.0).is_err());
+            assert!(r.sample(89.9, f64::NAN).is_err());
+            assert!(r.sample(f64::INFINITY, -179.9).is_err());
         }
     }
 }

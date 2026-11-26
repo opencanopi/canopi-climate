@@ -122,11 +122,10 @@ pub fn classify(t: &[f32; 12], p: &[f32; 12]) -> Option<u8> {
         2.0 * mat + 14.0
     };
 
-    // Beck et al. (2018) Table 1 / Peel et al. (2007): Group E (polar/alpine)
-    // is evaluated before Group B (arid) so dry tundra is classified ET, not BSk/BWk.
-    let sym = if t_hot <= 10.0 {
-        if t_hot > 0.0 { "ET" } else { "EF" }.to_string()
-    } else if map < 10.0 * p_threshold {
+    // Peel et al. (2007, HESS 11:1633, p. 1636) / Beck et al. (2018): Group B (arid)
+    // is evaluated before A, C, D, and E so dry polar/alpine cells with MAP < 10 * P_thresh
+    // classify as BSk/BWk rather than ET/EF.
+    let sym = if map < 10.0 * p_threshold {
         let desert = map < 5.0 * p_threshold;
         let hot = mat >= 18.0;
         match (desert, hot) {
@@ -136,6 +135,8 @@ pub fn classify(t: &[f32; 12], p: &[f32; 12]) -> Option<u8> {
             (false, false) => "BSk",
         }
         .to_string()
+    } else if t_hot <= 10.0 {
+        if t_hot > 0.0 { "ET" } else { "EF" }.to_string()
     } else if t_cold >= 18.0 {
         if p_dry >= 60.0 {
             "Af"
@@ -266,12 +267,13 @@ mod tests {
         assert_eq!(classify(&NUUK_LIKE_T, &NUUK_LIKE_P).map(symbol), Some("ET"));
         let ef = [-30.0f32; 12];
         assert_eq!(classify(&ef, &[20.0; 12]).map(symbol), Some("EF"));
-        // BUG-05: Dry tundra (t_hot <= 10 C, MAT > 0 C, MAP < 10 * P_thresh) is ET, not BSk/BWk.
+        // Peel et al. (2007, HESS 11:1633, p. 1636): Group B is identified before E,
+        // so dry tundra with MAP = 120 mm (< 10 * 15.3 = 153 mm, > 5 * 15.3 = 76.5 mm) is BSk.
         let dry_tundra_t = [-6.0, -5.0, -3.0, 0.0, 3.0, 6.0, 8.0, 7.0, 4.0, 1.0, -2.0, -5.0];
-        let dry_tundra_p = [10.0; 12]; // MAP = 120 mm < 10 * (2*0.67 + 14) = 153 mm
+        let dry_tundra_p = [10.0; 12];
         assert_eq!(
             classify(&dry_tundra_t, &dry_tundra_p).map(symbol),
-            Some("ET")
+            Some("BSk")
         );
         let mut bad = PARIS_T;
         bad[3] = f32::NAN;
