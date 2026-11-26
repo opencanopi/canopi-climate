@@ -371,7 +371,14 @@ pub fn stage_soil(cfg: &BuildConfig) -> Result<()> {
         if (v.width, v.height, v.geo) != (vars[0].width, vars[0].height, vars[0].geo) {
             return Err(PipelineError::Data(format!(
                 "soil: raster {} grid ({}x{}, {:?}) does not match {} ({}x{}, {:?})",
-                VARIABLES[idx], v.width, v.height, v.geo, VARIABLES[0], vars[0].width, vars[0].height, vars[0].geo
+                VARIABLES[idx],
+                v.width,
+                v.height,
+                v.geo,
+                VARIABLES[0],
+                vars[0].width,
+                vars[0].height,
+                vars[0].geo
             )));
         }
     }

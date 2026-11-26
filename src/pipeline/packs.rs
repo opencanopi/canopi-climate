@@ -68,7 +68,7 @@ pub struct PackEntry {
     pub bytes: u64,
     /// Archive SHA-256 (lowercase hex).
     pub sha256: String,
-    /// Number of payload files inside the pack (excluding `SHA256SUMS.pack`).
+    /// Number of payload files inside the pack (excluding `SHA256SUMS.<id>`).
     pub file_count: usize,
     /// Layer directories included in this pack.
     pub layers: Vec<String>,

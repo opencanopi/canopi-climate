@@ -207,7 +207,10 @@ fn check_ifd(bytes: &[u8]) -> Result<(), TileError> {
         } else {
             u64::from(u32_at(e + 8).unwrap_or(0))
         };
-        if at.checked_add(size).is_none_or(|end| end > bytes.len() as u64) {
+        if at
+            .checked_add(size)
+            .is_none_or(|end| end > bytes.len() as u64)
+        {
             return Err(past(format!("tag {tag}")));
         }
         let typed = if INTEGER_TAGS.contains(&tag) {
@@ -579,8 +582,7 @@ mod tests {
         // BUG-08: NaN in ModelPixelScale (tag 33550) must be rejected with TileError::Georef.
         let mut nan_scale = FIXTURE.to_vec();
         let e = entry_of(&nan_scale, 33550);
-        let scale_off =
-            u32::from_le_bytes(nan_scale[e + 8..e + 12].try_into().unwrap()) as usize;
+        let scale_off = u32::from_le_bytes(nan_scale[e + 8..e + 12].try_into().unwrap()) as usize;
         nan_scale[scale_off..scale_off + 8].copy_from_slice(&f64::NAN.to_le_bytes());
         assert!(matches!(
             Tile::decode(&nan_scale),

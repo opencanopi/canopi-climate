@@ -349,13 +349,25 @@ fn eval_period(
         && tmin.is_finite()
         && min_req.is_finite()
     {
-        push_margin(&mut margins, FactorId::ColdExtreme, tmin - min_req, "C", 5.0);
+        push_margin(
+            &mut margins,
+            FactorId::ColdExtreme,
+            tmin - min_req,
+            "C",
+            5.0,
+        );
     }
     if let (Some(tmax), Some(max_req)) = (snap.tmax_extreme_c, env.max_tmax_extreme_c)
         && tmax.is_finite()
         && max_req.is_finite()
     {
-        push_margin(&mut margins, FactorId::HeatExtreme, max_req - tmax, "C", 4.0);
+        push_margin(
+            &mut margins,
+            FactorId::HeatExtreme,
+            max_req - tmax,
+            "C",
+            4.0,
+        );
     }
     if let (Some(cwd), Some(max_cwd)) = (snap.cwd_mm, env.max_cwd_mm)
         && cwd.is_finite()

@@ -8,8 +8,12 @@ use crate::koppen;
 use crate::model::{ARIDITY_CAP, ARIDITY_MIN_PET_MM};
 
 /// Mid-month day of year (1-based, 365-day calendar), January first.
+///
+/// Pinned to the v0.7.0 values because this table feeds Thornthwaite PET
+/// (`aridity`), [`photoperiod`], and [`crate::microclimate`] solar geometry;
+/// changing it would alter `aridity` across existing grid tiles.
 pub const MID_MONTH_DOY: [f64; 12] = [
-    15.5, 45.0, 74.5, 105.0, 135.5, 166.0, 196.5, 227.5, 258.0, 288.5, 319.0, 349.5,
+    15., 46., 75., 105., 135., 162., 198., 228., 258., 288., 318., 344.,
 ];
 /// Mean days per month (February averaged over leap years).
 const DAYS_IN_MONTH: [f64; 12] = [31., 28.25, 31., 30., 31., 30., 31., 31., 30., 31., 30., 31.];
@@ -358,5 +362,16 @@ mod tests {
         for h in val["monthly_hours"].as_array().unwrap() {
             assert!(h.to_string().len() <= 6, "noisy float in JSON: {h}");
         }
+    }
+
+    #[test]
+    fn mid_month_doy_is_pinned_for_aridity_reproducibility() {
+        // Feeds Thornthwaite PET -> aridity in climate tiles; must not drift.
+        assert_eq!(
+            MID_MONTH_DOY,
+            [
+                15., 46., 75., 105., 135., 162., 198., 228., 258., 288., 318., 344.
+            ]
+        );
     }
 }

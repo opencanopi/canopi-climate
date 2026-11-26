@@ -363,7 +363,6 @@ fn analogues_cmd(
         }
         _ => (0.5, true),
     };
-    let _ = seasonality_fallback;
     let query = canopi_climate::analogues::AnalogueQuery {
         lat,
         lon,
@@ -380,9 +379,18 @@ fn analogues_cmd(
     let bytes = std::fs::read(&bin_path).map_err(|e| PipelineError::io(&bin_path, e))?;
     let index = canopi_climate::analogues::AnalogueIndex::from_bytes(&bytes)
         .map_err(|e| PipelineError::Data(e.to_string()))?;
-    let res = index.search(&query, &opts);
+    #[derive(serde::Serialize)]
+    struct CliAnalogueOutput {
+        #[serde(flatten)]
+        result: canopi_climate::analogues::AnalogueResult,
+        seasonality_fallback: bool,
+    }
+    let out = CliAnalogueOutput {
+        result: index.search(&query, &opts),
+        seasonality_fallback,
+    };
     let text =
-        serde_json::to_string_pretty(&res).map_err(|e| PipelineError::Data(e.to_string()))?;
+        serde_json::to_string_pretty(&out).map_err(|e| PipelineError::Data(e.to_string()))?;
     println!("{text}");
     Ok(ExitCode::SUCCESS)
 }

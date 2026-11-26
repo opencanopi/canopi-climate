@@ -269,7 +269,9 @@ mod tests {
         assert_eq!(classify(&ef, &[20.0; 12]).map(symbol), Some("EF"));
         // Peel et al. (2007, HESS 11:1633, p. 1636): Group B is identified before E,
         // so dry tundra with MAP = 120 mm (< 10 * 15.3 = 153 mm, > 5 * 15.3 = 76.5 mm) is BSk.
-        let dry_tundra_t = [-6.0, -5.0, -3.0, 0.0, 3.0, 6.0, 8.0, 7.0, 4.0, 1.0, -2.0, -5.0];
+        let dry_tundra_t = [
+            -6.0, -5.0, -3.0, 0.0, 3.0, 6.0, 8.0, 7.0, 4.0, 1.0, -2.0, -5.0,
+        ];
         let dry_tundra_p = [10.0; 12];
         assert_eq!(
             classify(&dry_tundra_t, &dry_tundra_p).map(symbol),

@@ -267,8 +267,8 @@ rounded to 6 decimals.
 | Lookup | Radius | "Has data" |
 |---|---|---|
 | Climate | 2 cells (0.1°) | every one of the 72 bands is set, except that the 9 `aridity` bands MAY be `NODATA` |
-| Soil | 2 cells (0.05°) | `ph_h2o`, `sand` and `clay` are set |
-| Regions | 2 cells (0.05°), each code searched on its own | that code's band is set |
+| Soil | 2 cells (0.05°) | `ph_h2o`, `sand`, `clay`, and `fill_distance` are set |
+| Regions | 2 cells (0.05°), each code searched on its own | that code's band decodes to a valid code (not `NODATA` and within `0..26^letters`) |
 
 **Climate answer**: `lat`, `lon`, `cell_lat`, `cell_lon`, `distance_cells`, `tile`, and `periods`: one
 entry per slot in slot order with `period`, `scenario`, `koppen`, `koppen_code`,
@@ -554,6 +554,10 @@ monolithic tar or assembled from packs:
 | `v05` | `SHA256SUMS.v05`, `extremes_tail/`, `frost_calendar/`, `analogues.bin` |
 | `v06` | `SHA256SUMS.v06`, `phenology/`, `water_balance/` |
 | `v07` | `SHA256SUMS.v07`, `soil_plus/`, `terrain/` |
+
+`v0.7.0` packs contain a shared `SHA256SUMS.pack`; packs from `v0.7.1` onward contain
+`SHA256SUMS.<id>` so multiple packs can be unpacked into the same directory without overwriting
+each other's checksum file.
 
 Top-level fields in `packs-vX.Y.Z.json`: `format` (`"canopi-climate-packs"`), `format_version`
 (`1`), `version`, `manifest_sha256`, `climate_tiles_sha256`, and `packs[]`. Each entry in `packs[]`

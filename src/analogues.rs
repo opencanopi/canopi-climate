@@ -1046,8 +1046,8 @@ mod tests {
             let r = idx.search(&bad_q, &SearchOptions::default());
             assert!(r.matches.is_empty());
             assert!(r.novel_climate);
-            let rb = AnalogueIndex::search_bytes(&bytes, &bad_q, &SearchOptions::default())
-                .unwrap();
+            let rb =
+                AnalogueIndex::search_bytes(&bytes, &bad_q, &SearchOptions::default()).unwrap();
             assert!(rb.matches.is_empty());
         }
 
@@ -1060,7 +1060,9 @@ mod tests {
         let mut nan_mean = bytes.clone();
         nan_mean[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(AnalogueIndex::from_bytes(&nan_mean).is_err());
-        assert!(AnalogueIndex::search_bytes(&nan_mean, &base_q, &SearchOptions::default()).is_err());
+        assert!(
+            AnalogueIndex::search_bytes(&nan_mean, &base_q, &SearchOptions::default()).is_err()
+        );
 
         let mut nan_thresh = bytes.clone();
         nan_thresh[112..116].copy_from_slice(&f32::NAN.to_le_bytes());

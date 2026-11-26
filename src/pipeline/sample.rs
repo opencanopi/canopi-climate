@@ -1000,59 +1000,58 @@ fn count_all_present(r: &crate::raster::Raster) -> usize {
 /// Why a tile file does not decode as the tile `name` or match `expected_complete`
 /// (`None`: it does).
 fn decode_problem(bytes: &[u8], kind: Kind, name: &str, expected_complete: u32) -> Option<String> {
-    let decoded: std::result::Result<(TileId, Option<usize>), crate::tile::TileError> = match kind {
-        Kind::Climate => Tile::decode(bytes).map(|t| (t.id(), Some(t.complete_cells()))),
-        Kind::Soil => LayerTile::decode(bytes, SOIL_BANDS).map(|t| {
-            let n = (0..crate::layer::LAYER_TILE_LEN)
-                .filter(|&i| crate::soil::has_soil(&t, i))
-                .count();
-            (t.id(), Some(n))
-        }),
-        Kind::SoilPlus => LayerTile::decode(bytes, SOIL_PLUS_BANDS).map(|t| {
-            let n = (0..crate::layer::LAYER_TILE_LEN)
-                .filter(|&i| crate::soil_plus::has_soil_plus(&t, i))
-                .count();
-            (t.id(), Some(n))
-        }),
-        Kind::Regions => LayerTile::decode(bytes, REGION_BANDS).map(|t| {
-            let r = t.as_raster();
-            let n = (0..crate::layer::LAYER_TILE_LEN)
-                .filter(|&i| r.pixel(i).iter().any(|&v| v != crate::model::NODATA))
-                .count();
-            (t.id(), Some(n))
-        }),
-        Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| (t.id(), None)),
-        Kind::Extremes => {
-            ExtremesTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
-        }
-        Kind::ExtremesTail => ExtremesTailTile::decode(bytes)
-            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
-        Kind::FrostCalendar => FrostCalendarTile::decode(bytes)
-            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
-        Kind::Monthly => {
-            MonthlyTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
-        }
-        Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes)
-            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
-        Kind::Phenology => {
-            PhenologyTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
-        }
-        Kind::WaterBalance => WaterBalanceTile::decode(bytes)
-            .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
-        Kind::Terrain => TerrainTile::decode(bytes).map(|t| {
-            let r = t.as_raster();
-            let n = (0..r.grid().tile_len())
-                .filter(|&i| {
-                    let p = r.pixel(i);
-                    p.len() >= 3
-                        && p[0] != crate::model::NODATA
-                        && p[1] != crate::model::NODATA
-                        && p[2] != crate::model::NODATA
-                })
-                .count();
-            (t.id(), Some(n))
-        }),
-    };
+    let decoded: std::result::Result<(TileId, Option<usize>), crate::tile::TileError> =
+        match kind {
+            Kind::Climate => Tile::decode(bytes).map(|t| (t.id(), Some(t.complete_cells()))),
+            Kind::Soil => LayerTile::decode(bytes, SOIL_BANDS).map(|t| {
+                let n = (0..crate::layer::LAYER_TILE_LEN)
+                    .filter(|&i| crate::soil::has_soil(&t, i))
+                    .count();
+                (t.id(), Some(n))
+            }),
+            Kind::SoilPlus => LayerTile::decode(bytes, SOIL_PLUS_BANDS).map(|t| {
+                let n = (0..crate::layer::LAYER_TILE_LEN)
+                    .filter(|&i| crate::soil_plus::has_soil_plus(&t, i))
+                    .count();
+                (t.id(), Some(n))
+            }),
+            Kind::Regions => LayerTile::decode(bytes, REGION_BANDS).map(|t| {
+                let r = t.as_raster();
+                let n = (0..crate::layer::LAYER_TILE_LEN)
+                    .filter(|&i| r.pixel(i).iter().any(|&v| v != crate::model::NODATA))
+                    .count();
+                (t.id(), Some(n))
+            }),
+            Kind::Layer(bands) => LayerTile::decode(bytes, bands).map(|t| (t.id(), None)),
+            Kind::Extremes => ExtremesTile::decode(bytes)
+                .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+            Kind::ExtremesTail => ExtremesTailTile::decode(bytes)
+                .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+            Kind::FrostCalendar => FrostCalendarTile::decode(bytes)
+                .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+            Kind::Monthly => {
+                MonthlyTile::decode(bytes).map(|t| (t.id(), Some(count_all_present(t.as_raster()))))
+            }
+            Kind::MonthlyPrecip => MonthlyPrecipTile::decode(bytes)
+                .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+            Kind::Phenology => PhenologyTile::decode(bytes)
+                .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+            Kind::WaterBalance => WaterBalanceTile::decode(bytes)
+                .map(|t| (t.id(), Some(count_all_present(t.as_raster())))),
+            Kind::Terrain => TerrainTile::decode(bytes).map(|t| {
+                let r = t.as_raster();
+                let n = (0..r.grid().tile_len())
+                    .filter(|&i| {
+                        let p = r.pixel(i);
+                        p.len() >= 3
+                            && p[0] != crate::model::NODATA
+                            && p[1] != crate::model::NODATA
+                            && p[2] != crate::model::NODATA
+                    })
+                    .count();
+                (t.id(), Some(n))
+            }),
+        };
     match decoded {
         Err(e) => Some(e.to_string()),
         Ok((id, _)) if id.name() != name => Some(format!("holds tile {id}")),
@@ -1862,7 +1861,8 @@ mod tests {
             sha256: crate::pipeline::sha256_bytes(&bytes),
             complete_cells: 0,
         };
-        m.layers.push(crate::pipeline::soil::layer_spec(vec![sspec]));
+        m.layers
+            .push(crate::pipeline::soil::layer_spec(vec![sspec]));
         std::fs::write(&path, serde_json::to_string(&m).unwrap()).unwrap();
 
         let mut g = Grid::open(&dir).unwrap();
